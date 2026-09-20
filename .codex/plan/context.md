@@ -2,7 +2,7 @@
 name: ts-covi-entrypoints-context
 description: 진입점 탐색 요구와 코드 근거
 created: 2026-09-21
-status: draft
+status: implemented
 ---
 
 # 작업 맥락
@@ -51,7 +51,7 @@ NestJS/Express/API, React Router 페이지, Vue Router 페이지/원문까지 �
 
 ## 검증 규칙
 
-원본 구현의 기존 검사 실행과 임시 CLI/JSON assertion은 즉시 수행한다. 새/변경 TestCode 파일은 TaskPlan 지침에 따라 별도 후속 PR이며 사용자 요청 후 진행한다. 상세는 test-code-plan.md. 이번 계획 작성에서는 제품 코드·패키지·테스트를 변경하거나 실행하지 않는다.
+원본 구현에서 기존 검사와 임시 CLI/JSON assertion을 실행했다. 새/변경 TestCode 파일은 TaskPlan 지침에 따라 별도 후속 PR이며 사용자 요청 후 진행한다. 상세는 test-code-plan.md.
 
 ## 스크립트 지원 추가 요청
 

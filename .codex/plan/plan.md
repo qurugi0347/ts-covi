@@ -2,12 +2,12 @@
 name: ts-covi-entrypoints-plan
 description: endpoint·페이지·스크립트 중심 탐색 구현 계획
 created: 2026-09-21
-status: draft
+status: implemented
 ---
 
 # 진입점 중심 탐색 구현 계획
 
-[Architecture](architecture.html) → [맥락](context.md) → [체크리스트](checklist.md). 이전 M1~M6 완료 기록은 [보관 문서](completed-v1/plan.md)에 유지한다. 이번 요청은 계획 작성이며 제품 구현·commit·push는 포함하지 않는다.
+[Architecture](architecture.html) → [맥락](context.md) → [체크리스트](checklist.md). 이전 M1~M6 완료 기록은 [보관 문서](completed-v1/plan.md)에 유지한다. 이 계획의 제품 구현과 단계별 commit은 완료했으며 push/PR은 수행하지 않았다.
 
 ## 목표와 완료 조건
 
