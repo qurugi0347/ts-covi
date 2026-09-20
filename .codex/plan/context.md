@@ -1,93 +1,63 @@
 ---
-name: ts-covi-context
-description: ts-covi 요구사항과 GitNexus 및 로컬 Wecovi 참고 소스의 확인된 사실
-created: 2026-09-20
+name: ts-covi-entrypoints-context
+description: 진입점 탐색 요구와 코드 근거
+created: 2026-09-21
+status: draft
 ---
 
 # 작업 맥락
 
-## 사용자 요청 원문
+## 요청 원문
 
-> 그러면 \~/dev/covi/ts-covi 폴더 만들어서 git repositiory 세팅해주고
-> 지금 논의한 내용토대로 plan 작성해줘 plan에는 단계적으로 어떻게 개발할지와
-> 최종 목표를 함께 작성하도록 해 구현 방법같은것도 작성해주면 좋겠어
+> 함수 검색이 보이는 위치에 함수들의 진입점 단위로 노출되면 좋을 것 같아 nestjs나 express같은 api라면 endpoint 단위 react나 vue 라면 페이지 단위로 볼 수 있게 하고싶은데 어떤 방법이 있을까?
 
-앞선 논의에서 사용자는 GitNexus의 코드 분석·적재 방식을 참고하여 함수 내부 흐름을 Scratch처럼 시각화하고, 호출마다 문법에 맞게 붙인 주석과 args를 보여주는 프로젝트를 요청했다. 결과는 로컬 데이터로 저장하고 HTML에서 읽으며, 로컬 wecovi-plugin을 참고한다.
+> 저걸 구현할 계획 작성해줘 [$TaskPlan] [@Ponytail]
 
-## 이번 작업 범위와 상태
+- 목적: 사용자가 기능의 시작점에서 함수 흐름을 읽게 한다.
+- 문제: 전체 함수 평면 목록에 inline callback이 함께 노출돼 시작점 탐색이 어렵다.
+- 방법: 라우트 선언에서 entrypoints를 추출하고 기존 functions를 ID로 연결한다. 수동 roots와 전체 함수 모드는 보존한다.
 
-- 경로: `/Users/overdune/dev/covi/ts-covi`.
-- 이번 작업은 새 로컬 Git 저장소와 개발 계획 작성이다. 제품 구현, 의존성 설치, 원격 저장소 생성·연결, commit/push는 포함하지 않는다.
-- 기본 branch는 `main`. 기존 대상 폴더와 상위 적용 AGENTS.md가 없는 것을 확인한 뒤 생성했다.
-- 대화로 제공된 AGENTS 지침을 적용했다. reference 저장소에 적용되는 규칙은 해당 저장소 탐색 시 적용한다.
-- 설계 status는 draft다. 단계별 구현과 검증은 아직 수행하지 않았다.
+## 확인 사실
 
-## 참고 자료: GitNexus
+2026-09-21 기준 main / HEAD 2743e1a, origin/main과 일치하며 작업 시작 시 clean. 추가 저장소/상위 AGENTS.md는 발견되지 않았고 대화 제공 지침을 적용한다. M1~M6는 완료 상태다. 기존 전체 계획 5종을 completed-v1/에 복사하여 보존하고 새 확장 계획을 작성한다. HANDOFF의 과거 브랜치 표기는 현재 Git 상태의 근거로 사용하지 않는다.
 
-확인 기준은 2026-09-20에 읽은 `main` commit `b888260a867fcd97a447799089e2cf416a17fd9f`다. 원격 main의 이후 변경은 이 문서의 근거에 포함하지 않는다.
-
-| 원본 | 확인한 사실 / 활용 |
+| 확인 파일 | 사실 / 설계 근거 |
 |---|---|
-| [filesystem-walker.ts](https://github.com/abhigyanpatwari/GitNexus/blob/b888260a867fcd97a447799089e2cf416a17fd9f/gitnexus/src/core/ingestion/filesystem-walker.ts) | 파일 경로/크기 스캔과 내용 읽기의 분리 |
-| [pipeline.ts](https://github.com/abhigyanpatwari/GitNexus/blob/b888260a867fcd97a447799089e2cf416a17fd9f/gitnexus/src/core/ingestion/pipeline.ts) | 수집·파싱·해석·파생 그래프 단계. CFG/PDG는 opt-in |
-| [scope-resolution phase](https://github.com/abhigyanpatwari/GitNexus/blob/b888260a867fcd97a447799089e2cf416a17fd9f/gitnexus/src/core/ingestion/scope-resolution/pipeline/phase.ts) | 스코프 기반 import/call/inheritance 해석 |
-| [cfg/types.ts](https://github.com/abhigyanpatwari/GitNexus/blob/b888260a867fcd97a447799089e2cf416a17fd9f/gitnexus/src/core/ingestion/cfg/types.ts) | 직렬화 가능한 함수 CFG, 분기·반복·종료 간선 |
-| [lbug-adapter.ts](https://github.com/abhigyanpatwari/GitNexus/blob/b888260a867fcd97a447799089e2cf416a17fd9f/gitnexus/src/core/lbug/lbug-adapter.ts) | CSV 및 COPY 기반 LadybugDB 적재. ts-covi는 이 DB 계층을 복제하지 않음 |
-| [LICENSE](https://github.com/abhigyanpatwari/GitNexus/blob/b888260a867fcd97a447799089e2cf416a17fd9f/LICENSE) | PolyForm Noncommercial. 소스 복제와 아이디어 참고를 구분 |
+| src/model/flow.ts | formatVersion 1, roots 함수 ID 참조, groupPath, 공용 validateFlowDocument가 새 객체를 반환하므로 entrypoints 보존 로직 필요 |
+| src/analyzer/analyze.ts | Program/Checker/함수 ID map, source span, @covi-root/group; JSX opaque 및 callback 시점 미추정 |
+| src/ui/main.tsx | 모든 함수 평면 검색, roots 최초 선택, targetFunctionId 펼침; selectedEntryPointId 추가 필요 |
+| src/cli/index.ts, viewer.ts | JSON 검증 후 HTML 동시 저장, partial exit 2, JSON 안전 embed 재사용 |
+| package.json, tsconfig.json | Node >=22.16, TS Compiler API 6.0.3, React, esbuild/tsx; test/typecheck/build 존재 |
+| README.md, HANDOFF.md, 기존 plan 3종 | 제품 정확성 원칙·지원 경계·과거 검증 결과 활용 |
 
-GitNexus 분석을 직접 실행한 결과가 아니라 원본 소스 확인에 근거한다. 당시 MCP list_repos에는 GitNexus와 Wecovi 인덱스가 없었다.
+이전 턴 AST 대조 결과 자체 스냅샷 227개 함수 중 anonymous 163개였으며 inline callback이 주원인이다. 이번 목적은 목록의 탐색 단위 개선이고 anonymous 함수 데이터 삭제는 아니다. 과거 17 tests 통과는 기존 이력이며 신규 기능 검증 결과가 아니다.
 
-## 참고 자료: 로컬 Wecovi
+## 선택과 가정
 
-위치: `/Users/overdune/dev/wecovi-plugin`. 확인 당시 branch는 `codex/fix-flow-canvas-ui`, resolver/editor/test/CSS 수정 및 `sample/` untracked 상태였다. 아래 내용은 commit 고정본이 아닌 수정 중인 작업 트리 관찰이며 복사나 변경하지 않았다.
+NestJS/Express/API, React Router 페이지, Vue Router 페이지/원문까지 이번 계획에 포함. 사용자가 라우터를 지정하지 않아 React Router를 첫 구현 대상으로 제안한다. Next/TanStack/Nuxt 지원은 승인 시 범위 변경 가능하지만 자동 포함하지 않는다. Vue SFC 내부 분석은 별도 작업이다. 프레임워크 런타임을 부팅하지 않는다. 정적 목록은 실제 서버의 모든 배포 endpoint를 보장하지 않는다.
 
-| 상대 파일 | 확인된 사실 |
-|---|---|
-| `src/main/kotlin/com/wecovi/plugin/service/FlowService.kt` | VFS 탐색 → PSI 파일 → 분석/호출 해석 |
-| `src/main/kotlin/com/wecovi/plugin/model/FlowContracts.kt` | 직렬화 모델에 kind/label/codeExpression/sourceLocation/targetSymbolId/children |
-| `src/main/kotlin/com/wecovi/plugin/analysis/TypeScriptFlowAnalyzer.kt` | 표현식·return·변수 초기화 처리. 조건/반복/try 분석은 현재 구현에서 누락. 콜백 본문 제외 |
-| `src/main/kotlin/com/wecovi/plugin/analysis/CoviMetadataIndexer.kt` | 함수의 @covi/@covi-root/@covi-group 해석 |
-| `src/main/kotlin/com/wecovi/plugin/analysis/CallTargetResolver.kt` | 호출된 함수 설명을 label에 반영. 호출 위치별 주석과 다름 |
-| `ui/src/main.tsx` | document/result 메시지 수신과 중첩 카드 표시. standalone 뷰어에서는 IDE bridge 대체 필요 |
-| `sample/order-api/order-service.ts` | 주문 처리 직선 흐름, 검증 if/throw, reduce 콜백을 검증 사례로 참고 가능 |
+소스코드·구형 JSON·파일 선택·CLI 저장과 partial 규칙을 유지한다. .vue 참조 파일을 추가 수집할 경우 기존 프로젝트 루트/ignore/realpath 경계를 적용한다. DB·API 서버·새 plugin framework·배포 설정은 필요 없다. 첫 단계에서 신규 runtime dependency는 계획하지 않는다.
 
-Wecovi의 plugin-only 문서 방향과 별개로 이번 사용자 요청은 독립 CLI/JSON/HTML 제품이다. UI/모델 개념을 참고하되 기존 저장소의 작업을 옮기거나 수정하지 않는다.
+## 참고 근거
 
-## 제안과 확정 사실 구분
+- [NestJS Controllers](https://docs.nestjs.com/controllers): Controller prefix와 method decorator.
+- [Express middleware](https://expressjs.com/en/guide/using-middleware/): Router 및 middleware 등록.
+- [React Router route object](https://reactrouter.com/start/data/route-object): Component/loader/action/lazy.
+- [Vue Router lazy routes](https://router.vuejs.org/guide/advanced/lazy-loading): route component import.
 
-- 사용자 요구: 새 저장소, 단계별 plan, 최종 목표 및 구현 방법, 로컬 데이터와 HTML, Scratch 형태 및 주석 표시.
-- 구현 제안: TypeScript Compiler API, JSON 우선, 단일 패키지, React 중첩 블록, 호출 위치별 @covi-call JSON 문법. 자세한 선택 이유는 [계획](plan.md)에 있다.
-- 아직 미검증: 성능, 전체 구문 지원 정확성, standalone 빌드 방식과 런타임 버전 조합. M1~M6에서 검증한다.
-- [TypeScript 공식 Compiler API 문서](https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API)를 참고했다. 확인 당시 문서는 6.0 이하 API 대상이며 7.1 API 변경을 안내하므로 구현 시 호환 버전을 고정한다.
+공식 문서는 앞선 설계 조사에서 확인했다. 구체 지원 버전은 E3~E6 구현 검증 프로젝트에서 실제 package/lockfile과 함께 기록한다. 위 설명을 모든 버전 호환 보장으로 사용하지 않는다.
 
-실행 상태는 [체크리스트](checklist.md)를 기준으로 한다.
+참조 작업 ‘ponytail 전역 설치’(019fe49c-b85d-7b92-b69e-b1cee92d0360)는 read_thread로 확인했다. 설치 이력일 뿐 제품 요구사항 근거가 아니다. 현재 제공된 Ponytail 4.10.0 지침을 적용한다.
 
+## 검증 규칙
 
-## 2026-09-20 실행 계획 보강
+원본 구현의 기존 검사 실행과 임시 CLI/JSON assertion은 즉시 수행한다. 새/변경 TestCode 파일은 TaskPlan 지침에 따라 별도 후속 PR이며 사용자 요청 후 진행한다. 상세는 test-code-plan.md. 이번 계획 작성에서는 제품 코드·패키지·테스트를 변경하거나 실행하지 않는다.
 
-요청 원문: “저 내용 기반으로 작업 계획 작성해줘 [$TaskPlan] … [@Ponytail]”. 앞선 인계 내용의 M1→M6 순서와 정확성 원칙을 실행 Task로 구체화한다.
+## 스크립트 지원 추가 요청
 
-- 목적: 정적 구조를 원본 프로젝트 없이 읽을 수 있는 JSON/HTML 도구를 단계적으로 완성한다.
-- 문제: 기존 문서는 제품 설계와 milestone 중심이며, 작업별 파일·선행 조건·검증 연결 및 architecture overview가 부족했다.
-- 방법: 기존 설계를 보존하고 M1.1~M6.2 Task, 재사용 판단, overview, 인수 체크를 추가한다. 구현이나 패키지 설치는 하지 않는다.
-- 직접 재확인: HANDOFF.md, README.md, 계획 3종, .gitignore, git status. main은 커밋이 없고 문서 6개가 untracked였다. package.json·코드·기존 테스트·빌드 명령은 없다. 변경 가능한 제품 패턴도 아직 없다.
-- 적용 지침: 대화로 제공한 AGENTS.md. 대상 저장소 및 상위 경로에 추가 AGENTS.md는 발견되지 않았다.
-- 구성 영향: M1에서 단일 패키지와 빌드를 신설한다. DB·API 서버·배포 서비스는 추가하지 않는다. Node/pnpm/TypeScript 버전과 번들 방식은 구현 시 검증하며 현재 고정하지 않았다.
-- 참고 작업 “ponytail 전역 설치”(019fe49c-b85d-7b92-b69e-b1cee92d0360)는 read_thread로 확인했다. 플러그인 설치 기록이며 ts-covi 요구사항 근거로 사용하지 않는다. 이번 세션에 제공된 Ponytail 지침을 적용한다.
-- 테스트 규칙: 사용자 요청의 단계별 필수 검증과 Ponytail의 실행 가능한 최소 검증을 유지한다. 별도 TestCode PR은 추가 회귀 확장만 다루며 필수 검증을 보류하는 이유로 삼지 않는다.
-- 실제 프로젝트 검증 대상은 M6에서 사용자가 지정한 읽기 권한 범위로 확정한다. 성능 목표치는 첫 측정 후 결정하며 아직 수치 보장은 없다.
+> 일반 script 같은거로 실행하는 case도 탐색할 수 있을까?
+> 이 내용 plan 업데이트 해줘
 
-산출물: [overview](architecture.html), [TaskList](plan.md#실행-tasklist), [실행 상태](checklist.md), [후속 회귀 확장](test-code-plan.md).
+목적은 프레임워크 없는 실행 파일도 진입점에서 탐색하는 것이다. analyze.ts의 supportedFunction 인덱스와 analyzeBody 호출을 재확인했고, 현재 파일 최상위 호출/await/조건문은 실행 단위로 수집되지 않는다. package.json에 tsx 명령과 dist JS bin이 있는 것도 확인했다. 따라서 현재 저장소의 bin을 원본 TS로 자동 연결한다고 보장하지 않는다.
 
-## 2026-09-20 구현 결과
-
-- TypeScript 7.0.2는 패키지 루트에서 기존 Compiler API를 제공하지 않아 실제 검증 후 6.0.3으로 고정했다.
-- 단일 패키지에 `src/model`, `src/analyzer`, `src/cli`, `src/ui`를 구현했다. DB·서버·workspace·schema framework는 추가하지 않았다.
-- 독립 주문 fixture는 complete이며, ts-covi 자체 분석은 지원 경계 11개와 진단 46개가 있는 partial이다.
-- 고정 commit `da62b8f`, Darwin 25.2.0 arm64, Node 22.16.0, pnpm 11.4.0, 7 files/1,331 LOC에서 분석 3회 중앙값 1.99s, peak RSS 중앙값 409,534,464 bytes, JSON 1,361,369 bytes였다. viewer 로딩 중앙값은 60.8ms였다.
-- `file://` E2E에서 함수 탐색, 구조 블록, 내부 함수 펼침, 재귀 경계, 주석/인자/원문, partial·version 오류, 악성 HTML 텍스트 렌더링을 확인했다.
-
-
-### Wecovi 읽기 전용 재확인
-
-독립 탐색 결과의 주요 모델·주석·UI 코드를 직접 대조했다. `FlowContracts.kt`는 상대 경로/offset, formatVersion, targetSymbolId, boundaryKind를 제공하지만 함수 정의 테이블은 없다. `CoviMetadataIndexer.kt`는 주석이 있는 함수의 metadata를 추출하므로 ts-covi의 모든 함수 목록 정책은 별도 구현한다. `ui/src/main.tsx`의 재귀 카드와 aria-expanded는 참고하고 JCEF 메시지·요청 후 children 삽입은 가져오지 않는다. 참조 저장소 AGENTS.md는 해당 탐색에만 적용하며 기존 수정 파일을 보존했다.
+선택: 공통 UI 뒤 S1을 추가한다. scripts/bin/명시 --entry로 실행 파일을 찾고, modules 선택적 필드와 별도 moduleCoverage로 함수와 구분한다. 최상위 블록 분석과 함수 호출 펼치기는 기존 로직을 재사용한다. 복잡한 shell과 JS sourcemap은 후속 범위이며 실행 파일 지정으로 보완한다. 제품 코드는 수정하지 않고 draft 계획 5종만 동기화한다.

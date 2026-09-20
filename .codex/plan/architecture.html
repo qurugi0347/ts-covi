@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>ts-covi Architecture · 실행 계획</title>
+  <title>ts-covi · 진입점 탐색 계획</title>
   <style>
     :root {
       --bg: #f7f8fb;
@@ -96,10 +96,20 @@
     .step-no { display: grid; place-items: center; width: 54px; height: 54px; border-radius: 16px; background: var(--brand-soft); color: var(--brand); font-weight: 850; }
     .step h3 { margin: 0 0 5px; }
     .step p { margin: 4px 0; }
+    .function { color: #4d42c4; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+    .arrow-list { padding: 0; margin: 0; list-style: none; }
+    .arrow-list li { position: relative; padding: 7px 0 7px 24px; }
+    .arrow-list li::before { content: "→"; position: absolute; left: 0; color: var(--brand); font-weight: 800; }
+    .formula { padding: 17px; border: 1px dashed #9ba8be; border-radius: 12px; background: #f8fafc; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; white-space: pre-wrap; }
+    details { margin: 12px 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+    summary { cursor: pointer; padding: 15px 17px; font-weight: 750; }
+    details > div { padding: 0 17px 17px; }
+    .file-map code { word-break: break-all; }
     footer { margin-top: 64px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
     @media (prefers-color-scheme: dark) {
       :root { --bg: #0d1220; --surface: #151c2c; --surface-2: #1c2538; --ink: #e6ebf5; --muted: #9da9bd; --line: #2b364c; --brand-soft: #292552; --info-soft: #162844; --danger-soft: #3a1b22; }
       code { color: #c5bfff; background: #292552; }
+      .formula { background: #111827; }
       .callout.warning { color: #f6e5b5; background: #3a3018; border-color: #665222; }
       .callout { color: #c5d9ff; }
     }
@@ -120,9 +130,6 @@
       .step-no { width: 42px; height: 42px; border-radius: 12px; }
       th, td { padding: 10px; }
     }
-    nav a { min-height: 44px; }
-    .diagram svg { min-width: 440px; }
-    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
   </style>
 </head>
 <body>
@@ -130,45 +137,28 @@
   <div class="layout">
     <aside>
       <div class="aside-kicker">Architecture Overview</div>
-      <div class="aside-title">ts-covi 개발 계획</div>
+      <div class="aside-title">진입점에서 흐름 읽기</div>
       <nav aria-label="문서 목차">
-        <a href="#background">1. 배경</a><a href="#intuition">2. 직관</a><a href="#comparison">3. 변경 전후 비교</a><a href="#flow">4. 실행·의존 흐름</a><a href="#choices">5. 핵심 선택</a><a href="#tasks">6. 작업 연결</a>
+        <a href="#background">1. 배경</a><a href="#intuition">2. 직관</a><a href="#comparison">3. 변경 전후</a><a href="#flow">4. 실행·의존 흐름</a><a href="#choices">5. 핵심 선택</a><a href="#tasks">6. 작업 연결</a>
       </nav>
-      <div class="aside-meta">2026-09-20 · draft<br>M0 완료 / M1부터 구현 예정</div>
+      <div class="aside-meta">2026-09-21 · draft · main / 2743e1a</div>
     </aside>
 
     <main>
       <header class="hero">
         <span class="eyebrow">ARCHITECTURE · PLAN</span>
-        <h1>코드 구조를<br>읽는 블록으로</h1>
-        <p>TS/TSX를 정적 분석해 JSON에 저장하고, 서버 없이 HTML에서 함수 흐름을 읽는다.</p>
+        <h1>함수 목록에서<br>endpoint·페이지·스크립트로</h1>
+        <p>탐색 목록과 JSON 메타데이터를 확장하고 기존 함수 블록은 재사용합니다.</p>
         <div class="stats">
-          <div class="stat"><strong>JSON</strong><span>공용 데이터 계약</span></div><div class="stat"><strong>M1 → M6</strong><span>단계별 검증</span></div><div class="stat"><strong>읽기 전용</strong><span>원본 코드 보존</span></div>
+          <div class="stat"><strong>4개</strong><span>프레임워크 대상</span></div><div class="stat"><strong>9단계</strong><span>구현·인수 Task</span></div><div class="stat"><strong>v1 호환</strong><span>기존 JSON 유지</span></div>
         </div>
       </header>
 
 
-      <section id="background"><h2>1. 배경</h2><p class="lead">호출 관계만으로는 함수 안에서 어떤 조건으로 무엇이 반복되는지 읽기 어렵다. 소스의 구조를 저장하고, 같은 구조를 중첩 블록으로 보여준다.</p><div class="grid-2"><div class="card fact"><h3>확인된 현재 상태</h3><p>M0 문서만 존재. 제품 코드·패키지·빌드 산출물은 없고 main에 커밋도 없다.</p></div><div class="card interpretation"><h3>계획의 판단 기준</h3><p>함수 정의는 한 번 저장한다. 실제 값·실행 분기·비동기 완료 순서를 추측하지 않는다.</p></div></div></section>
-<section id="intuition"><h2>2. 직관</h2><p><code>outer(inner(amount))</code>는 inner 호출을 먼저 읽고 outer를 읽는다. 인자 <code>inner(amount)</code>의 원문은 유지한다. 주석 설명은 코드 인자와 별도 데이터다.</p><div class="callout"><strong>호출 참조와 구문 중첩은 다르다</strong>분기·반복은 본문 안에 중첩한다. 다른 함수는 ID로 참조하고 펼칠 때 읽는다. 재귀는 조상 함수 ID에서 멈춘다.</div></section>
-<section id="comparison"><h2>3. 변경 전후 비교</h2><div class="table-wrap"><table><thead><tr><th>대상</th><th>변경 전</th><th>변경 후</th><th>상태</th><th>영향</th></tr></thead><tbody>
-<tr><td>분석 CLI</td><td>신규</td><td>TS/TSX → JSON</td><td>추가</td><td>코드 실행 없이 구조 보존</td></tr>
-<tr><td>JSON 계약</td><td>설계 초안</td><td>버전·참조·소스 범위 검증</td><td>추가</td><td>CLI와 HTML의 동일한 입력 규칙</td></tr>
-<tr><td>HTML</td><td>신규</td><td>파일 선택 → 중첩 블록</td><td>추가</td><td>서버·원본 프로젝트 없이 탐색</td></tr>
-<tr><td>Wecovi</td><td>수정 중인 참고 저장소</td><td>읽기 전용 참고</td><td>유지</td><td>사용자 작업 보존</td></tr></tbody></table></div>
-<div class="legend"><span><i class="l-kept"></i>유지</span><span><i class="l-changed"></i>변경</span><span><i class="l-added"></i>추가</span></div>
-<div class="diagram-pair"><div class="diagram"><div class="diagram-title"><strong>변경 전</strong></div><p>신규 — 실행 가능한 제품 흐름 없음.</p></div><div class="diagram"><div class="diagram-title"><strong>변경 후</strong></div><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 170" role="img" aria-label="[추가] 분석 CLI → [추가] JSON → [추가] HTML"><rect x="10" y="48" width="210" height="70" rx="12" fill="#DCFCE7" stroke="#15803D" stroke-width="3" stroke-dasharray="5 3"/><text x="115" y="89" text-anchor="middle" fill="#14532D" font-size="18">[추가] 분석 CLI</text><path d="M 221 83 h 27 l -7 -5 m 7 5 l -7 5" fill="none" stroke="#475569" stroke-width="2"/><rect x="250" y="48" width="210" height="70" rx="12" fill="#DCFCE7" stroke="#15803D" stroke-width="3" stroke-dasharray="5 3"/><text x="355" y="89" text-anchor="middle" fill="#14532D" font-size="18">[추가] JSON</text><path d="M 461 83 h 27 l -7 -5 m 7 5 l -7 5" fill="none" stroke="#475569" stroke-width="2"/><rect x="490" y="48" width="210" height="70" rx="12" fill="#DCFCE7" stroke="#15803D" stroke-width="3" stroke-dasharray="5 3"/><text x="595" y="89" text-anchor="middle" fill="#14532D" font-size="18">[추가] HTML</text></svg></div></div></section>
-<section id="flow"><h2>4. 실행·의존 흐름</h2><div class="step"><div class="step-no">01</div><div><h3>분석 경계</h3><p>tsconfig와 ignore로 내보낼 소스를 정한다. Program/TypeChecker로 함수와 호출을 읽고 제어 구조를 보존한다. 대상 코드를 실행하지 않는다.</p></div></div>
-<div class="step"><div class="step-no">02</div><div><h3>저장 경계</h3><p>공용 검증기로 JSON을 확인하고 임시 파일을 rename한다. 실패하면 이전 결과를 보존한다. 미지원·미해결은 partial과 진단으로 표시한다.</p></div></div>
-<div class="step"><div class="step-no">03</div><div><h3>화면 경계</h3><p>File API → 같은 검증기 → 함수 선택 → 중첩 블록 → 호출 펼침. 원문과 주석을 텍스트로 표시한다.</p></div></div><div class="callout warning"><strong>정적 분석의 한계</strong>외부 호출·런타임 DI·콜백 실행 시점은 확정하지 않는다. await는 대기 위치만 보여준다. complete는 지원 범위의 분석 완전성이다.</div></section>
-<section id="choices"><h2>5. 핵심 선택</h2><div class="table-wrap"><table><thead><tr><th>선택</th><th>이유</th><th>대안과 tradeoff</th></tr></thead><tbody>
-<tr><td>Compiler API</td><td>TS 설정·심볼 해석 활용</td><td>Tree-sitter보다 TS에 집중. 버전 호환 검증 필요</td></tr>
-<tr><td>단일 패키지 + JSON</td><td>저장과 공유 계약 최소화</td><td>DB·workspace 분리는 보류. 대용량은 M6 측정</td></tr>
-<tr><td>React + standalone HTML</td><td>함수 구조를 재귀 UI로 표시</td><td>JCEF bridge 제외. 단일 파일 번들 검증 필요</td></tr>
-<tr><td>검증기만 공유</td><td>CLI와 UI 두 사용처가 확정</td><td>범용 framework·resolver interface는 만들지 않음</td></tr></tbody></table></div></section>
-<section id="tasks"><h2>6. 작업 연결</h2><p>M1부터 순서대로 진행한다. 단계의 완료 기준이 통과한 뒤 checklist를 갱신한다. 필수 검증은 각 단계에 포함하고 추가 회귀 확장만 후속 요청으로 분리한다.</p><div class="table-wrap"><table><thead><tr><th>plan Task</th><th>단계</th><th>변경 대상</th><th>checklist 검증</th></tr></thead><tbody><tr><td>M1.1–M1.3</td><td>기반·JSON·최소 HTML</td><td>src/model, ui, 빌드 설정</td><td>블록 1개, 버전/참조 거부, file://</td></tr><tr><td>M2.1–M2.3</td><td>순차 분석 CLI</td><td>src/analyzer, src/cli</td><td>평가 순서·alias·저장 실패 보존</td></tr><tr><td>M3.1–M3.2</td><td>분기·반복·예외</td><td>analyzer, model</td><td>종료 경로·finally·미지원 경계</td></tr><tr><td>M4.1</td><td>주석·인자</td><td>analyzer</td><td>모호 주석 진단·구조 불변</td></tr><tr><td>M5.1–M5.2</td><td>탐색 UI</td><td>ui</td><td>재귀·원문·접근성・안전 렌더링</td></tr><tr><td>M6.1–M6.2</td><td>실제 프로젝트 인수</td><td>fixtures, README</td><td>clean install·원문 대조·성능 측정</td></tr></tbody></table></div><p><a href="plan.md">상세 계획</a> · <a href="checklist.md">체크리스트</a> · <a href="context.md">조사 근거</a> · <a href="test-code-plan.md">후속 회귀 확장</a></p></section>
+      <section id="background"><h2>1. 배경</h2><p class="lead">수백 개 함수에서 시작점을 찾는 비용을 줄입니다. API는 요청 경로, 화면은 페이지 경로, 스크립트는 실행 명령·파일에서 탐색합니다.</p><div class="grid-2"><div class="card fact"><h3>확인된 사실</h3><p>현재 UI는 전체 함수 평면 목록입니다. roots와 groupPath, 함수 ID 참조 및 블록 렌더러는 이미 있습니다.</p></div><div class="card interpretation"><h3>계획상 선택</h3><p>기존 함수 저장 구조 위에 라우트별 진입점 정보를 더합니다. 호출되지 않는 함수라는 이유로 시작점으로 추정하지 않습니다.</p></div></div></section><section id="intuition"><h2>2. 직관</h2><div class="card"><h3>사용자는 진입점부터 고릅니다</h3><p><code>GET /orders/:id</code> → 등록된 handler 선택 → 기존 함수 블록 펼치기</p><p><code>/orders</code> → 페이지 component 선택 → 함수 블록 또는 Vue 파일 원문 확인</p><p><code>seed → scripts/seed.ts</code> → 파일 최상위 블록 → main() 함수 펼치기</p><p>동일 함수가 두 URL에 등록되면 목록에는 두 진입점, JSON에는 함수 정의 하나만 존재합니다.</p></div></section><section id="comparison"><h2>3. 변경 전후</h2><div class="table-wrap"><table><thead><tr><th>대상</th><th>변경 전</th><th>변경 후</th><th>상태</th><th>영향</th></tr></thead><tbody><tr><td>목록</td><td>전체 함수</td><td>진입점 + 전체 함수 모드</td><td>변경</td><td>콜백 목록 탐색 부담 축소</td></tr><tr><td>JSON</td><td>functions / roots</td><td>선택적 entrypoints·modules·moduleCoverage</td><td>추가</td><td>구형 v1 읽기 유지</td></tr><tr><td>API</td><td>수동 root</td><td>Nest·Express 등록 탐지</td><td>추가</td><td>HTTP method·경로별 탐색</td></tr><tr><td>페이지</td><td>수동 함수 선택</td><td>React Router·Vue Router 탐지</td><td>추가</td><td>페이지 단위 접근</td></tr><tr><td>함수 내부</td><td>중첩 블록 / ID 참조</td><td>동일 렌더러 재사용</td><td>유지</td><td>기존 기능 보존</td></tr><tr><td>Vue 내부</td><td>미지원</td><td>.vue 원문만 연결</td><td>변경</td><td>SFC 분석 완료로 표시하지 않음</td></tr><tr><td>스크립트</td><td>함수 본문만 분석</td><td>명시된 실행 파일의 최상위 블록</td><td>추가</td><td>초기화·await·main 탐색</td></tr></tbody></table></div><div class="diagram-pair"><div class="card"><h3>변경 전</h3><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="탐색 흐름" viewBox="0 0 498 120"><rect x="8" y="22" width="150" height="76" rx="9" fill="#E2E8F0" stroke="#475569"/><text x="83" y="50" text-anchor="middle" fill="#172033" font-size="13">[유지]</text><text x="83" y="75" text-anchor="middle" fill="#172033" font-size="13">소스 분석</text><path d="M158 60 h16" stroke="#475569"/><path d="M168 56 l6 4 -6 4" fill="none" stroke="#475569"/><rect x="174" y="22" width="150" height="76" rx="9" fill="#FEF3C7" stroke="#D97706"/><text x="249" y="50" text-anchor="middle" fill="#172033" font-size="13">[변경]</text><text x="249" y="75" text-anchor="middle" fill="#172033" font-size="13">전체 함수 목록</text><path d="M324 60 h16" stroke="#475569"/><path d="M334 56 l6 4 -6 4" fill="none" stroke="#475569"/><rect x="340" y="22" width="150" height="76" rx="9" fill="#E2E8F0" stroke="#475569"/><text x="415" y="50" text-anchor="middle" fill="#172033" font-size="13">[유지]</text><text x="415" y="75" text-anchor="middle" fill="#172033" font-size="13">함수 블록</text></svg></div><div class="card"><h3>변경 후</h3><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="탐색 흐름" viewBox="0 0 498 120"><rect x="8" y="22" width="150" height="76" rx="9" fill="#E2E8F0" stroke="#475569"/><text x="83" y="50" text-anchor="middle" fill="#172033" font-size="13">[유지]</text><text x="83" y="75" text-anchor="middle" fill="#172033" font-size="13">소스 분석</text><path d="M158 60 h16" stroke="#475569"/><path d="M168 56 l6 4 -6 4" fill="none" stroke="#475569"/><rect x="174" y="22" width="150" height="76" rx="9" fill="#DCFCE7" stroke="#15803D"/><text x="249" y="50" text-anchor="middle" fill="#172033" font-size="13">[추가]</text><text x="249" y="75" text-anchor="middle" fill="#172033" font-size="13">진입점 목록</text><path d="M324 60 h16" stroke="#475569"/><path d="M334 56 l6 4 -6 4" fill="none" stroke="#475569"/><rect x="340" y="22" width="150" height="76" rx="9" fill="#E2E8F0" stroke="#475569"/><text x="415" y="50" text-anchor="middle" fill="#172033" font-size="13">[유지]</text><text x="415" y="75" text-anchor="middle" fill="#172033" font-size="13">함수 블록</text></svg></div></div><p>범례: 회색 [유지] · 주황 [변경] · 초록 [추가]. 두 흐름은 왼쪽에서 오른쪽으로 읽습니다.</p></section><section id="flow"><h2>4. 실행·의존 흐름</h2><ol><li>scripts/bin/--entry의 적격 TS/TSX 파일을 모은 뒤 기존 Program·Checker와 함수 인덱스를 구성합니다.</li><li>프레임워크 import와 등록 선언을 확인하고 정적 경로·대상을 연결합니다.</li><li>함수 ID·스크립트 module ID 또는 안전하게 수집한 원문 위치를 진입점에 기록합니다.</li><li>JSON을 검증하고 기존 CLI로 JSON·내장 HTML을 함께 저장합니다.</li><li>진입점에서 대상 함수를 선택해 기존 블록을 탐색합니다.</li></ol><div class="callout warning"><strong>등록 관계와 실행 순서는 다릅니다</strong>Express middleware·React loader/action·event/effect를 하나의 동기 실행 흐름으로 합치지 않습니다. 동적 경로는 원문과 미해결 이유를 남깁니다.</div></section><section id="choices"><h2>5. 핵심 선택</h2><div class="grid-2"><div class="card"><h3>작게 추가</h3><p>v1에 optional entrypoints·modules·moduleCoverage. 함수 정의와 호출 ID, 수동 roots를 재사용합니다. 플러그인 registry·DB·서버는 추가하지 않습니다.</p><p>대안인 함수별 URL 필드는 복수 경로와 다중 handler 표현이 부족합니다.</p></div><div class="card"><h3>지원 범위 명시</h3><p>단순 tsx/ts-node 명령·TS bin·명시 파일을 지원합니다. shell 실행, JS 원본 매핑, import 초기화 순서 추정은 후속입니다.</p><p>API는 NestJS·Express, 페이지는 React Router·Vue Router부터 시작합니다. Vue SFC 내부 흐름과 Next/TanStack/Nuxt는 후속입니다.</p><p>자동 탐지 실패는 수동 root로 보완하며 모르는 실행 결과를 추정하지 않습니다.</p></div></div><div class="callout"><strong>호환성과 정확성</strong>구형 JSON도 열 수 있습니다. 진입점 partial 진단은 기존 CLI exit 2 정책에 반영합니다. 실제 배포 URL 완전성을 보장하는 기능은 아닙니다.</div></section><section id="tasks"><h2>6. 작업 연결</h2><div class="step"><div class="step-no">1</div><div><h3>E1–E2 · 계약과 UI</h3><p>model·analyzer·UI: 구형 JSON, 검색, 복수 target, 0건 상태</p></div></div><div class="step"><div class="step-no">2</div><div><h3>S1 → E3–E4 · 스크립트와 API 진입점</h3><p>먼저 scripts/bin/--entry와 최상위 module을 검증하고, Nest/Express의 import alias·mount·오탐을 검사합니다.</p></div></div><div class="step"><div class="step-no">3</div><div><h3>E5–E6 · 페이지 진입점</h3><p>React/Vue Router: nested/index, component, SFC 원문 경계</p></div></div><div class="step"><div class="step-no">4</div><div><h3>E7–E8 · 통합 검증과 인수</h3><p>기존 검사·CLI/HTML 대조·성능 측정·사용자 피드백</p></div></div><p><a href="plan.md">상세 TaskList</a> · <a href="checklist.md">검증 체크리스트</a> · <a href="test-code-plan.md">후속 TestCode PR</a></p><div class="callout"><strong>현재 상태: draft</strong>계획 작성만 완료합니다. 구현은 사용자 요청 후 진행하며 테스트 파일 확장은 원본 완료 후 별도 요청으로 수행합니다.</div></section>
 
       <footer>
-        구현 전 계획 문서. 실행·성능은 미검증이며, 사용자 구현 요청 후 M1부터 시작한다.
+        TaskPlan · Ponytail · <a href="context.md">코드 근거와 경계</a> · <a href="completed-v1/plan.md">이전 완료 계획</a>
       </footer>
     </main>
   </div>
