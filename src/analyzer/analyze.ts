@@ -31,6 +31,7 @@ type AnalyzeContext = {
   diagnostics: FlowDocument["diagnostics"];
   supported: number;
   unsupported: number;
+  jumpTargets: Array<{ id: string; label?: string }>;
   nextNodeId: () => string;
 };
 
@@ -123,12 +124,44 @@ const resolveCall = (context: AnalyzeContext, call: ts.CallExpression): { target
   return { boundary: "unresolved" };
 };
 
+const createCallNode = (context: AnalyzeContext, expression: ts.CallExpression, awaited: boolean): CallNode => {
+  const resolution = resolveCall(context, expression);
+  const call: CallNode = {
+    id: context.nextNodeId(),
+    kind: "call",
+    source: sourceSpan(context.sourceFile, context.fileId, expression),
+    calleeExpression: expression.expression.getText(context.sourceFile),
+    args: expression.arguments.map((argument) => ({ expression: argument.getText(context.sourceFile) })),
+    awaited,
+    ...resolution,
+  };
+  context.supported += 1;
+  if (resolution.boundary === "unresolved" || resolution.boundary === "runtime") {
+    context.diagnostics.push({
+      severity: "warning",
+      code: resolution.boundary === "runtime" ? "RUNTIME_BINDING" : "UNRESOLVED_CALL",
+      message: `Cannot statically resolve ${call.calleeExpression}`,
+      source: call.source,
+    });
+  }
+  return call;
+};
+
 const expressionNodes = (context: AnalyzeContext, expression: ts.Expression, awaited = false): FlowNode[] => {
   if (ts.isAwaitExpression(expression)) return expressionNodes(context, expression.expression, true);
   if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression) || ts.isNonNullExpression(expression)) {
     return expressionNodes(context, expression.expression, awaited);
   }
   if (ts.isCallExpression(expression)) {
+    const access = ts.isPropertyAccessExpression(expression.expression) || ts.isElementAccessExpression(expression.expression) ? expression.expression : undefined;
+    if (expression.questionDotToken || access?.questionDotToken) {
+      const before = access ? expressionNodes(context, access.expression) : [];
+      const conditional = expression.arguments.flatMap((argument) => ts.isArrowFunction(argument) || ts.isFunctionExpression(argument) ? [] : expressionNodes(context, argument));
+      conditional.push(createCallNode(context, expression, awaited));
+      const then = sequence(context, expression, conditional);
+      context.supported += 1;
+      return [...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: `${access?.expression.getText(context.sourceFile) ?? expression.expression.getText(context.sourceFile)} != null`, then }];
+    }
     const children: FlowNode[] = [];
     if (ts.isPropertyAccessExpression(expression.expression) || ts.isElementAccessExpression(expression.expression)) {
       children.push(...expressionNodes(context, expression.expression.expression));
@@ -136,26 +169,7 @@ const expressionNodes = (context: AnalyzeContext, expression: ts.Expression, awa
     for (const argument of expression.arguments) {
       if (!ts.isArrowFunction(argument) && !ts.isFunctionExpression(argument)) children.push(...expressionNodes(context, argument));
     }
-    const resolution = resolveCall(context, expression);
-    const call: CallNode = {
-      id: context.nextNodeId(),
-      kind: "call",
-      source: sourceSpan(context.sourceFile, context.fileId, expression),
-      calleeExpression: expression.expression.getText(context.sourceFile),
-      args: expression.arguments.map((argument) => ({ expression: argument.getText(context.sourceFile) })),
-      awaited,
-      ...resolution,
-    };
-    context.supported += 1;
-    if (resolution.boundary === "unresolved" || resolution.boundary === "runtime") {
-      context.diagnostics.push({
-        severity: "warning",
-        code: resolution.boundary === "runtime" ? "RUNTIME_BINDING" : "UNRESOLVED_CALL",
-        message: `Cannot statically resolve ${call.calleeExpression}`,
-        source: call.source,
-      });
-    }
-    children.push(call);
+    children.push(createCallNode(context, expression, awaited));
     return children;
   }
   if (ts.isNewExpression(expression)) {
@@ -163,8 +177,22 @@ const expressionNodes = (context: AnalyzeContext, expression: ts.Expression, awa
     children.push(unsupported(context, expression, "Constructor calls are not supported yet."));
     return children;
   }
-  if (ts.isBinaryExpression(expression)) return [...expressionNodes(context, expression.left), ...expressionNodes(context, expression.right)];
-  if (ts.isConditionalExpression(expression)) return [unsupported(context, expression, "Conditional expressions are handled in M3.")];
+  if (ts.isBinaryExpression(expression)) {
+    if ([ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(expression.operatorToken.kind)) {
+      const before = expressionNodes(context, expression.left);
+      const then = sequence(context, expression.right, expressionNodes(context, expression.right));
+      context.supported += 1;
+      return [...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: expression.left.getText(context.sourceFile), then }];
+    }
+    return [...expressionNodes(context, expression.left), ...expressionNodes(context, expression.right)];
+  }
+  if (ts.isConditionalExpression(expression)) {
+    const before = expressionNodes(context, expression.condition);
+    const then = sequence(context, expression.whenTrue, expressionNodes(context, expression.whenTrue));
+    const otherwise = sequence(context, expression.whenFalse, expressionNodes(context, expression.whenFalse));
+    context.supported += 1;
+    return [...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: expression.condition.getText(context.sourceFile), then, else: otherwise }];
+  }
   if (ts.isPrefixUnaryExpression(expression) || ts.isPostfixUnaryExpression(expression)) return [];
   if (ts.isPropertyAccessExpression(expression)) return expressionNodes(context, expression.expression);
   if (ts.isElementAccessExpression(expression)) return [...expressionNodes(context, expression.expression), ...expressionNodes(context, expression.argumentExpression)];
@@ -175,13 +203,72 @@ const expressionNodes = (context: AnalyzeContext, expression: ts.Expression, awa
     return [];
   });
   if (ts.isTemplateExpression(expression)) return expression.templateSpans.flatMap((part) => expressionNodes(context, part.expression));
+  if (ts.isYieldExpression(expression)) return [unsupported(context, expression, "Generator yield execution is not supported.")];
   if (ts.isJsxElement(expression) || ts.isJsxSelfClosingElement(expression) || ts.isJsxFragment(expression)) {
     return [unsupported(context, expression, "JSX is preserved as an opaque expression.")];
   }
   return [];
 };
 
-const statementNodes = (context: AnalyzeContext, statement: ts.Statement): { nodes: FlowNode[]; terminates: boolean } => {
+const analyzeStatements = (context: AnalyzeContext, owner: ts.Node, statements: readonly ts.Statement[]): { sequence: SequenceNode; terminates: boolean } => {
+  const nodes: FlowNode[] = [];
+  let terminates = false;
+  for (const statement of statements) {
+    const result = statementNodes(context, statement);
+    nodes.push(...result.nodes);
+    if (result.terminates) { terminates = true; break; }
+  }
+  return { sequence: sequence(context, owner, nodes), terminates };
+};
+
+const asBlock = (context: AnalyzeContext, statement: ts.Statement): { sequence: SequenceNode; terminates: boolean } =>
+  ts.isBlock(statement) ? analyzeStatements(context, statement, statement.statements) : (() => {
+    const result = statementNodes(context, statement);
+    return { sequence: sequence(context, statement, result.nodes), terminates: result.terminates };
+  })();
+
+const loopParts = (context: AnalyzeContext, statement: ts.IterationStatement, label?: string): FlowNode => {
+  const id = context.nextNodeId();
+  let loopKind: "for" | "for-of" | "for-in" | "while" | "do";
+  let initializer: ts.Node | undefined;
+  let condition: ts.Expression | undefined;
+  let incrementor: ts.Expression | undefined;
+  if (ts.isForStatement(statement)) {
+    loopKind = "for"; initializer = statement.initializer; condition = statement.condition; incrementor = statement.incrementor;
+  } else if (ts.isForOfStatement(statement)) {
+    loopKind = "for-of"; initializer = statement.initializer; condition = statement.expression;
+  } else if (ts.isForInStatement(statement)) {
+    loopKind = "for-in"; initializer = statement.initializer; condition = statement.expression;
+  } else if (ts.isWhileStatement(statement)) {
+    loopKind = "while"; condition = statement.expression;
+  } else {
+    loopKind = "do"; condition = (statement as ts.DoStatement).expression;
+  }
+  const initializerNodes = initializer && ts.isExpression(initializer) ? expressionNodes(context, initializer)
+    : initializer && ts.isVariableDeclarationList(initializer) ? initializer.declarations.flatMap((declaration) => declaration.initializer ? expressionNodes(context, declaration.initializer) : [])
+    : [];
+  const conditionNodes = condition ? expressionNodes(context, condition) : [];
+  const incrementorNodes = incrementor ? expressionNodes(context, incrementor) : [];
+  context.jumpTargets.push({ id, label });
+  const body = asBlock(context, statement.statement).sequence;
+  context.jumpTargets.pop();
+  context.supported += 1;
+  return {
+    id,
+    kind: "loop",
+    source: sourceSpan(context.sourceFile, context.fileId, statement),
+    loopKind,
+    initializer: initializer?.getText(context.sourceFile),
+    condition: condition?.getText(context.sourceFile),
+    incrementor: incrementor?.getText(context.sourceFile),
+    initializerFlow: initializerNodes.length ? sequence(context, initializer!, initializerNodes) : undefined,
+    conditionFlow: conditionNodes.length ? sequence(context, condition!, conditionNodes) : undefined,
+    incrementorFlow: incrementorNodes.length ? sequence(context, incrementor!, incrementorNodes) : undefined,
+    body,
+  };
+};
+
+const statementNodes = (context: AnalyzeContext, statement: ts.Statement, label?: string): { nodes: FlowNode[]; terminates: boolean } => {
   if (ts.isVariableStatement(statement)) {
     const calls = statement.declarationList.declarations.flatMap((declaration) => declaration.initializer ? expressionNodes(context, declaration.initializer) : []);
     context.supported += 1;
@@ -199,6 +286,49 @@ const statementNodes = (context: AnalyzeContext, statement: ts.Statement): { nod
     context.supported += 1;
     return { nodes: [...calls, { id: context.nextNodeId(), kind: "return", source: sourceSpan(context.sourceFile, context.fileId, statement), expression: statement.expression?.getText(context.sourceFile) }], terminates: true };
   }
+  if (ts.isThrowStatement(statement)) {
+    const calls = expressionNodes(context, statement.expression);
+    context.supported += 1;
+    return { nodes: [...calls, { id: context.nextNodeId(), kind: "throw", source: sourceSpan(context.sourceFile, context.fileId, statement), expression: statement.expression.getText(context.sourceFile) }], terminates: true };
+  }
+  if (ts.isIfStatement(statement)) {
+    const before = expressionNodes(context, statement.expression);
+    const then = asBlock(context, statement.thenStatement);
+    const otherwise = statement.elseStatement ? asBlock(context, statement.elseStatement) : undefined;
+    context.supported += 1;
+    return {
+      nodes: [...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, statement), condition: statement.expression.getText(context.sourceFile), then: then.sequence, else: otherwise?.sequence }],
+      terminates: then.terminates && Boolean(otherwise?.terminates),
+    };
+  }
+  if (ts.isIterationStatement(statement, false)) return { nodes: [loopParts(context, statement, label)], terminates: false };
+  if (ts.isBreakStatement(statement) || ts.isContinueStatement(statement)) {
+    const targetLabel = statement.label?.text;
+    const target = targetLabel ? context.jumpTargets.findLast((entry) => entry.label === targetLabel) : context.jumpTargets.at(-1);
+    context.supported += 1;
+    return { nodes: [{ id: context.nextNodeId(), kind: ts.isBreakStatement(statement) ? "break" : "continue", source: sourceSpan(context.sourceFile, context.fileId, statement), targetId: target?.id, targetLabel }], terminates: true };
+  }
+  if (ts.isLabeledStatement(statement)) {
+    if (ts.isIterationStatement(statement.statement, false)) return statementNodes(context, statement.statement, statement.label.text);
+    return { nodes: [unsupported(context, statement, "Only labels attached to loops are supported.")], terminates: false };
+  }
+  if (ts.isTryStatement(statement)) {
+    const body = analyzeStatements(context, statement.tryBlock, statement.tryBlock.statements);
+    const catchResult = statement.catchClause ? analyzeStatements(context, statement.catchClause.block, statement.catchClause.block.statements) : undefined;
+    const finallyResult = statement.finallyBlock ? analyzeStatements(context, statement.finallyBlock, statement.finallyBlock.statements) : undefined;
+    context.supported += 1;
+    const finallyOverrides = Boolean(finallyResult?.terminates);
+    return {
+      nodes: [{
+        id: context.nextNodeId(), kind: "try", source: sourceSpan(context.sourceFile, context.fileId, statement), body: body.sequence,
+        catch: catchResult ? { variable: statement.catchClause?.variableDeclaration?.name.getText(context.sourceFile), body: catchResult.sequence } : undefined,
+        finally: finallyResult?.sequence,
+        finallyOverrides: finallyOverrides || undefined,
+      }],
+      terminates: finallyOverrides || (body.terminates && (!catchResult || catchResult.terminates)),
+    };
+  }
+  if (ts.isBlock(statement)) return { nodes: [analyzeStatements(context, statement, statement.statements).sequence], terminates: false };
   if (ts.isEmptyStatement(statement)) return { nodes: [], terminates: false };
   return { nodes: [unsupported(context, statement, `${ts.SyntaxKind[statement.kind]} is handled in a later milestone.`)], terminates: false };
 };
@@ -209,13 +339,7 @@ const analyzeBody = (context: AnalyzeContext, body: ts.ConciseBody): SequenceNod
     context.supported += 1;
     return sequence(context, body, nodes);
   }
-  const nodes: FlowNode[] = [];
-  for (const statement of body.statements) {
-    const result = statementNodes(context, statement);
-    nodes.push(...result.nodes);
-    if (result.terminates) break;
-  }
-  return sequence(context, body, nodes);
+  return analyzeStatements(context, body, body.statements).sequence;
 };
 
 export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = []): FlowDocument {
@@ -271,6 +395,7 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
       diagnostics,
       supported: 0,
       unsupported: 0,
+      jumpTargets: [],
       nextNodeId: () => `${entry.id}:node:${counter++}`,
     };
     const signature = checker.getSignatureFromDeclaration(entry.declaration);

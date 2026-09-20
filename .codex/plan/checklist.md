@@ -43,11 +43,11 @@ created: 2026-09-20
 
 ## M3 함수 내부 제어 구조 — M3.1~M3.2
 
-- [ ] if/삼항식/단락/optional chaining의 조건부 실행 보존
-- [ ] 반복 초기화·조건·본문·갱신 및 break/continue/label 대상 처리
-- [ ] throw/try/catch/finally 및 조기 종료 경로 처리
-- [ ] 콜백/미지원 구문에 명시적 경계와 진단, 순환 호출 참조에서도 유한 JSON 유지
-- [ ] 분기·반복·finally 종료 덮어쓰기 기대 결과 검증
+- [x] if/삼항식/단락/optional chaining의 조건부 실행 보존
+- [x] 반복 초기화·조건·본문·갱신 및 break/continue/label 대상 처리
+- [x] throw/try/catch/finally 및 조기 종료 경로 처리
+- [x] 콜백/미지원 구문에 명시적 경계와 진단, 순환 호출 참조에서도 유한 JSON 유지
+- [x] 분기·반복·finally 종료 덮어쓰기 기대 결과 검증
 
 ## M4 주석과 인자 — M4.1
 

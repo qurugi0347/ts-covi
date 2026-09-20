@@ -48,10 +48,14 @@ export type LoopNode = BaseNode & {
   initializer?: string;
   condition?: string;
   incrementor?: string;
+  initializerFlow?: SequenceNode;
+  conditionFlow?: SequenceNode;
+  incrementorFlow?: SequenceNode;
   body: SequenceNode;
 };
 export type JumpNode = BaseNode & {
   kind: "break" | "continue";
+  targetId?: string;
   targetLabel?: string;
 };
 export type ExitNode = BaseNode & {
@@ -63,6 +67,7 @@ export type TryNode = BaseNode & {
   body: SequenceNode;
   catch?: { variable?: string; body: SequenceNode };
   finally?: SequenceNode;
+  finallyOverrides?: boolean;
 };
 export type UnsupportedNode = BaseNode & {
   kind: "unsupported";
@@ -178,8 +183,11 @@ function node(
   nodeIds.add(id);
   const source = span(candidate.source, `${path}.source`, fileLengths);
   const kind = string(candidate.kind, `${path}.kind`);
-  const sequence = (entry: unknown, childPath: string) =>
-    node(entry, childPath, fileLengths, nodeIds, referencedFunctions) as SequenceNode;
+  const sequence = (entry: unknown, childPath: string): SequenceNode => {
+    const result = node(entry, childPath, fileLengths, nodeIds, referencedFunctions);
+    if (result.kind !== "sequence") throw new FlowValidationError(`${childPath} must be a sequence`);
+    return result;
+  };
   const children = (entry: unknown, childPath: string) =>
     array(entry, childPath).map((child, index) => node(child, `${childPath}[${index}]`, fileLengths, nodeIds, referencedFunctions));
 
@@ -239,12 +247,15 @@ function node(
         initializer: optionalString(candidate.initializer, `${path}.initializer`),
         condition: optionalString(candidate.condition, `${path}.condition`),
         incrementor: optionalString(candidate.incrementor, `${path}.incrementor`),
+        initializerFlow: candidate.initializerFlow === undefined ? undefined : sequence(candidate.initializerFlow, `${path}.initializerFlow`),
+        conditionFlow: candidate.conditionFlow === undefined ? undefined : sequence(candidate.conditionFlow, `${path}.conditionFlow`),
+        incrementorFlow: candidate.incrementorFlow === undefined ? undefined : sequence(candidate.incrementorFlow, `${path}.incrementorFlow`),
         body: sequence(candidate.body, `${path}.body`),
       };
     }
     case "break":
     case "continue":
-      return { id, kind, source, targetLabel: optionalString(candidate.targetLabel, `${path}.targetLabel`) };
+      return { id, kind, source, targetId: optionalString(candidate.targetId, `${path}.targetId`), targetLabel: optionalString(candidate.targetLabel, `${path}.targetLabel`) };
     case "return":
     case "throw":
       return { id, kind, source, expression: optionalString(candidate.expression, `${path}.expression`) };
@@ -262,6 +273,7 @@ function node(
             }
           : undefined,
         finally: candidate.finally === undefined ? undefined : sequence(candidate.finally, `${path}.finally`),
+        finallyOverrides: candidate.finallyOverrides === true || undefined,
       };
     }
     case "unsupported":
