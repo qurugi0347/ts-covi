@@ -2,11 +2,11 @@
 
 ## 현재 상태
 
-M1~M6 구현이 `codex/implement-ts-covi`에 완료됐다. TypeScript Compiler API 6.0.3 기반 CLI가 TS/TSX를 JSON으로 저장하고, `dist/viewer.html`에서 함수 검색·중첩 블록·내부 호출 펼침·재귀 경계·인자·주석·원문을 탐색한다.
+M1~M6 구현이 `codex/implement-ts-covi`에 완료됐다. TypeScript Compiler API 6.0.3 기반 CLI가 TS/TSX를 `.covi/flow.json`과 자동 로딩되는 `.covi/index.html`로 저장한다. HTML에서 함수 검색·중첩 블록·내부 호출 펼침·재귀 경계·인자·주석·원문을 탐색한다.
 
 ## 검증
 
-- `pnpm test`: 14개 통과
+- `pnpm test`: 17개 통과
 - `pnpm typecheck`: 통과
 - `pnpm build`: standalone viewer 생성
 - clean archive 설치부터 주문 CLI 분석까지 통과

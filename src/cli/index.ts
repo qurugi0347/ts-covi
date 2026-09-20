@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, rename, unlink, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { analyzeProject } from "../analyzer/analyze.js";
 import { validateFlowDocument } from "../model/flow.js";
+import { embedFlowDocument, loadViewerTemplate } from "./viewer.js";
 
 const usage = "Usage: ts-covi analyze --project ./tsconfig.json --out ./.covi/flow.json";
 
@@ -15,7 +16,65 @@ const option = (args: string[], name: string): string | undefined => {
 export const resolveOutputPath = (project: string, out = ".covi/flow.json"): string =>
   path.resolve(path.dirname(path.resolve(project)), out);
 
-export async function run(args: string[]): Promise<number> {
+const refuseSymlink = async (filePath: string): Promise<void> => {
+  try {
+    if ((await lstat(filePath)).isSymbolicLink()) throw new Error(`Refusing to replace a symbolic-link output file: ${filePath}`);
+  } catch (cause) {
+    if (!(cause && typeof cause === "object" && "code" in cause && cause.code === "ENOENT")) throw cause;
+  }
+};
+
+type RenameFile = (source: string, destination: string) => Promise<void>;
+
+export const replaceOutputs = async (outputPath: string, json: string, viewerPath: string, html: string, renameFile: RenameFile = rename): Promise<void> => {
+  await mkdir(path.dirname(outputPath), { recursive: true });
+  const temporaryPath = path.join(path.dirname(outputPath), `.${path.basename(outputPath)}.${randomUUID()}.tmp`);
+  const temporaryViewerPath = path.join(path.dirname(viewerPath), `.index.html.${randomUUID()}.tmp`);
+  const backupPath = `${temporaryPath}.backup`;
+  const backupViewerPath = `${temporaryViewerPath}.backup`;
+  let outputBackedUp = false;
+  let viewerBackedUp = false;
+  let outputInstalled = false;
+  let viewerInstalled = false;
+  try {
+    await writeFile(temporaryPath, json, { flag: "wx" });
+    await writeFile(temporaryViewerPath, html, { flag: "wx" });
+    try { await copyFile(outputPath, backupPath); outputBackedUp = true; } catch (cause) {
+      if (!(cause && typeof cause === "object" && "code" in cause && cause.code === "ENOENT")) throw cause;
+    }
+    try { await copyFile(viewerPath, backupViewerPath); viewerBackedUp = true; } catch (cause) {
+      if (!(cause && typeof cause === "object" && "code" in cause && cause.code === "ENOENT")) throw cause;
+    }
+    await renameFile(temporaryPath, outputPath);
+    outputInstalled = true;
+    await renameFile(temporaryViewerPath, viewerPath);
+    viewerInstalled = true;
+    await unlink(backupPath).catch(() => undefined);
+    await unlink(backupViewerPath).catch(() => undefined);
+  } catch (cause) {
+    try {
+      if (outputInstalled) {
+        if (outputBackedUp) await renameFile(backupPath, outputPath);
+        else await unlink(outputPath);
+      }
+      if (viewerInstalled) {
+        if (viewerBackedUp) await renameFile(backupViewerPath, viewerPath);
+        else await unlink(viewerPath);
+      }
+    } catch (rollbackCause) {
+      await unlink(temporaryPath).catch(() => undefined);
+      await unlink(temporaryViewerPath).catch(() => undefined);
+      throw new AggregateError([cause, rollbackCause], "Failed to restore previous analysis outputs; backup files were preserved.");
+    }
+    await unlink(temporaryPath).catch(() => undefined);
+    await unlink(temporaryViewerPath).catch(() => undefined);
+    await unlink(backupPath).catch(() => undefined);
+    await unlink(backupViewerPath).catch(() => undefined);
+    throw cause;
+  }
+};
+
+export async function run(args: string[], viewerTemplate?: string): Promise<number> {
   if (args[0] !== "analyze") {
     console.error(usage);
     return 1;
@@ -28,24 +87,18 @@ export async function run(args: string[]): Promise<number> {
   }
   const projectPath = path.resolve(project);
   const outputPath = resolveOutputPath(projectPath, out);
+  const viewerPath = path.join(path.dirname(outputPath), "index.html");
   try {
-    try {
-      if ((await lstat(outputPath)).isSymbolicLink()) throw new Error("Refusing to replace a symbolic-link output file.");
-    } catch (cause) {
-      if (!(cause && typeof cause === "object" && "code" in cause && cause.code === "ENOENT")) throw cause;
-    }
-    const document = analyzeProject(projectPath, [outputPath]);
+    if (path.basename(outputPath).toLowerCase() === "index.html") throw new Error("JSON output path cannot be index.html.");
+    await refuseSymlink(outputPath);
+    await refuseSymlink(viewerPath);
+    const template = viewerTemplate ?? await loadViewerTemplate();
+    const document = analyzeProject(projectPath, [outputPath, viewerPath]);
     validateFlowDocument(document);
-    await mkdir(path.dirname(outputPath), { recursive: true });
-    const temporaryPath = path.join(path.dirname(outputPath), `.${path.basename(outputPath)}.${randomUUID()}.tmp`);
-    try {
-      await writeFile(temporaryPath, `${JSON.stringify(document, null, 2)}\n`, { flag: "wx" });
-      await rename(temporaryPath, outputPath);
-    } catch (cause) {
-      await unlink(temporaryPath).catch(() => undefined);
-      throw cause;
-    }
-    console.log(`${document.coverage.status}: ${outputPath}`);
+    const json = `${JSON.stringify(document, null, 2)}\n`;
+    const html = embedFlowDocument(template, document);
+    await replaceOutputs(outputPath, json, viewerPath, html);
+    console.log(`${document.coverage.status}: ${outputPath}\nviewer: ${viewerPath}`);
     return document.coverage.status === "partial" ? 2 : 0;
   } catch (cause) {
     console.error(cause instanceof Error ? cause.message : String(cause));

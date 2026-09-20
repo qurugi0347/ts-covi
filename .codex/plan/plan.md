@@ -17,7 +17,7 @@ status: complete
 
 ### 최종 완료 조건
 
-- TS/TSX 프로젝트를 대상으로 CLI 분석 → JSON 저장 → 로컬 HTML 열기 → JSON 선택 → 함수 탐색이 끝까지 동작한다.
+- TS/TSX 프로젝트를 대상으로 CLI 분석 → `.covi/flow.json`과 `.covi/index.html` 저장 → 로컬 HTML 열기 → 함수 탐색이 끝까지 동작한다.
 - 순차 실행, 중첩 호출, 조건, 반복, 조기 종료, await, try/catch/finally가 지원 범위 안에서 올바르게 표현된다.
 - 지원하지 않는 구문과 미해결 호출은 누락하거나 추측하지 않고 원문 및 이유를 표시한다.
 - 호출 위치별 주석과 코드 인자 표현식을 분리해 보존하고 화면에 함께 표시한다.
@@ -118,7 +118,7 @@ exit code는 0=분석 및 저장 완료, 1=설정/읽기/저장 등 치명적 �
 
 - 기존 Wecovi의 React 중첩 카드 UI와 FlowDocument 개념을 참고한다. Kotlin PSI 분석기와 JCEF 브리지는 이식하지 않는다.
 - 분석 모듈과 React 뷰어를 한 저장소의 `src/analyzer`, `src/model`, `src/cli`, `ui`로 분리한다. 처음부터 workspace 여러 패키지로 나누지 않는다.
-- 빌드 결과는 JS/CSS를 포함하는 standalone `viewer.html`로 제공하고 `file://`에서 검증한다. JSON은 파일 선택/드롭의 File API로 읽는다. 옆 파일을 fetch하는 설계에 의존하지 않는다.
+- 빌드는 JS/CSS를 포함한 standalone HTML 템플릿을 만들고, CLI는 분석 시 검증된 JSON 스냅샷을 삽입해 `.covi/index.html`로 저장한다. `file://`에서 바로 열어 결과를 보고, 파일 선택/드롭으로 다른 JSON도 읽는다. 브라우저의 로컬 파일 fetch 허용 여부에 의존하지 않는다.
 - 목록 → 함수 선택 → 중첩 블록 → 호출 펼치기 → 인자/원문 패널 흐름을 만든다. 펼친 호출의 조상 ID를 확인해 재귀 경계를 표시한다.
 - 소스와 주석은 텍스트로 렌더링한다. 임의 HTML을 삽입하지 않는다. 파일 크기 제한, JSON 오류, 버전 오류, partial 상태를 사용자에게 표시한다.
 - 외부 프로젝트가 없어도 저장된 원문을 볼 수 있다. IDE 원본 이동은 이후 연동 기능이다.
@@ -179,7 +179,7 @@ M2 끝에는 작지만 실제 소스에서 생성된 JSON을 보는 수직 흐�
 |---|---|---|---|
 | M1.1 기반 | package.json, pnpm-lock.yaml, tsconfig*.json, 빌드 설정. Node/pnpm/TS 버전 및 test/typecheck/build 명령 고정 | 고정 버전 설치, typecheck/build가 실제 파일을 검사하는지 확인 | M0 |
 | M1.2 JSON 계약 | src/model/: discriminated union, formatVersion, source span, coverage 집계 정의, 공용 입력 검증 함수 | 유효 sample 수락; 알 수 없는 kind/버전, 중복 ID, 끊어진 참조, 잘못된 범위 거부 | M1.1 |
-| M1.3 최소 HTML | ui/, samples/minimal.json. File API로 JSON 선택, 검증 오류 또는 함수의 블록 하나 표시; JS/CSS 내장 dist/viewer.html | 네트워크 없는 file://에서 sample 로딩 및 오류 확인, test/typecheck/build | M1.2 |
+| M1.3 최소 HTML | ui/, samples/minimal.json. 내장 JSON 자동 로딩과 File API 입력, 검증 오류 또는 함수의 블록 하나 표시; JS/CSS 내장 dist/index.html | 네트워크 없는 file://에서 sample 로딩 및 오류 확인, test/typecheck/build | M1.2 |
 | M2.1 수집·함수 색인 | src/analyzer/: tsconfig 읽기, ignore/경로 경계, 함수 ID, 파일 원문 저장 | include/exclude, 외부 symlink, references, 한 줄의 복수 함수, d.ts 제외 확인 | M1.3 |
 | M2.2 순차 의미 | src/analyzer/: 선언·대입·증감·call·return·await, 직접/alias 호출 해석 | outer(inner()) 평가 순서, 콜백 본문 비삽입, 외부/미해결 경계 확인 | M2.1 |
 | M2.3 CLI 저장 | src/cli/: analyze 인자, 검증 후 임시 파일 rename, exit 0/1/2 | 실제 TS → JSON → HTML; 저장 실패 시 이전 결과 유지, 출력 symlink 거부 | M2.2 |

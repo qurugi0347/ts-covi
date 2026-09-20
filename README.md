@@ -21,10 +21,10 @@ pnpm build
 
 ```bash
 pnpm analyze --project ./tsconfig.json --out ./.covi/flow.json
-open ./dist/viewer.html
+open ./.covi/index.html
 ```
 
-`viewer.html`을 `file://`로 연 뒤 JSON을 선택하거나 화면에 놓는다. 별도 서버와 원본 프로젝트가 없어도 함수 검색, 중첩 블록, 내부 함수 펼치기, 인자·주석·원문을 탐색할 수 있다.
+CLI는 프로젝트 루트의 `.covi/flow.json`과 `.covi/index.html`을 함께 만든다. `index.html`에는 같은 분석 스냅샷이 안전하게 포함되므로 `file://`로 바로 열면 결과가 표시된다. 별도 서버 없이 함수 검색, 중첩 블록, 내부 함수 펼치기, 인자·주석·원문을 탐색할 수 있으며 파일 선택으로 다른 JSON을 열 수도 있다.
 
 배포된 CLI 형태의 인터페이스는 다음과 같다.
 

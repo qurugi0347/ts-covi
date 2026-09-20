@@ -28,8 +28,8 @@ created: 2026-09-20
 - [x] 단일 패키지 CLI/model/analyzer/ui 구조와 test/typecheck/build 명령 구성
 - [x] version/source span/coverage/diagnostics/노드 계약과 공용 검증기 구현
 - [x] 수동 sample JSON 및 유효/무효 계약 테스트
-- [x] standalone HTML 파일 선택 후 블록 1개 렌더링
-- [x] file:// 로딩, 버전/참조 오류 처리 확인
+- [x] `.covi/index.html`의 내장 분석 결과 자동 로딩 및 파일 선택 후 블록 렌더링
+- [x] 내장 데이터 로딩, 버전/참조 오류 처리 확인
 
 ## M2 순차 분석 수직 흐름 — M2.1~M2.3
 
@@ -64,7 +64,7 @@ created: 2026-09-20
 - [x] 인자·주석·원문 패널과 소스 위치 표시, M4의 인자 설명 화면 검증
 - [x] 오류/partial/크기 제한/텍스트 안전 렌더링
 - [x] 키보드·포커스·aria·좁은 화면 점검
-- [x] standalone HTML 및 JSON 기반 전체 탐색 E2E
+- [x] `.covi/index.html` 자동 로딩 경로 및 JSON 교체 흐름 검증
 
 ## M6 실제 프로젝트와 첫 버전 완료 — M6.1~M6.2
 
@@ -72,7 +72,7 @@ created: 2026-09-20
 - [x] 실제 TS/NestJS 프로젝트의 주요 함수와 결과 수동 대조
 - [x] 고정 환경 cold 3회 분석/로딩 시간, peak RSS, JSON 크기 기록
 - [x] 실제 결과에 따른 지원 구문·미지원 경계·사용법 문서 작성
-- [x] clean install → test → typecheck → build → CLI → file:// 뷰어 검증
+- [x] clean install → test → typecheck → build → CLI → `.covi/index.html` 구조/내장 데이터 검증
 - [x] plan의 최종 완료 조건 확인 및 남은 위험 보고
 
 ## 요청 발생 후 검토할 확장

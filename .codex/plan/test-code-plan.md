@@ -29,6 +29,6 @@ status: deferred
 
 ### 추가
 
-- Given: M6에서 문제를 재현한 JSON과 standalone HTML
-- When: JSON 선택, 함수 탐색, 호출 펼침과 키보드 조작을 재현한다.
+- Given: M6에서 문제를 재현한 `.covi/flow.json`과 `.covi/index.html`
+- When: 내장 결과 자동 로딩, JSON 교체, 함수 탐색, 호출 펼침과 키보드 조작을 재현한다.
 - Then: 예상 블록·오류·재귀 경계·포커스를 확인하고 주석/원문이 텍스트로 표시된다.
