@@ -11,7 +11,7 @@
     "ts-covi": "./dist/cli/index.js"
   },
   "scripts": {
-    "analyze": "tsx src/cli/index.ts",
+    "analyze": "tsx src/cli/index.ts analyze",
     "build": "pnpm run build:node && tsx scripts/build-viewer.ts",
     "build:node": "tsc -p tsconfig.node.json",
     "test": "tsx --test src/**/*.test.ts",

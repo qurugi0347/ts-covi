@@ -68,8 +68,8 @@ created: 2026-09-20
 
 ## M6 실제 프로젝트와 첫 버전 완료 — M6.1~M6.2
 
-- [ ] Wecovi 주문 흐름을 참고한 독립 fixture 검증
-- [ ] 실제 TS/NestJS 프로젝트의 주요 함수와 결과 수동 대조
+- [x] Wecovi 주문 흐름을 참고한 독립 fixture 검증
+- [x] 실제 TS/NestJS 프로젝트의 주요 함수와 결과 수동 대조
 - [ ] 고정 환경 cold 3회 분석/로딩 시간, peak RSS, JSON 크기 기록
 - [ ] 실제 결과에 따른 지원 구문·미지원 경계·사용법 문서 작성
 - [ ] clean install → test → typecheck → build → CLI → file:// 뷰어 검증

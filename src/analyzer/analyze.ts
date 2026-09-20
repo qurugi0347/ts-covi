@@ -133,7 +133,7 @@ const declarationTarget = (declaration: ts.Declaration | undefined, ids: Map<ts.
   return undefined;
 };
 
-const resolveCall = (context: AnalyzeContext, call: ts.CallExpression): { targetFunctionId?: string; boundary?: BoundaryKind } => {
+const resolveCall = (context: AnalyzeContext, call: ts.CallLikeExpression): { targetFunctionId?: string; boundary?: BoundaryKind } => {
   const declaration = context.checker.getResolvedSignature(call)?.declaration;
   const targetFunctionId = declarationTarget(declaration, context.functionIds);
   if (targetFunctionId) return { targetFunctionId };
@@ -143,6 +143,11 @@ const resolveCall = (context: AnalyzeContext, call: ts.CallExpression): { target
     return { boundary: "runtime" };
   }
   return { boundary: "unresolved" };
+};
+
+const recordBoundaryDiagnostic = (context: AnalyzeContext, call: CallNode): void => {
+  if (call.boundary !== "unresolved" && call.boundary !== "runtime") return;
+  context.diagnostics.push({ severity: "warning", code: call.boundary === "runtime" ? "RUNTIME_BINDING" : "UNRESOLVED_CALL", message: `Cannot statically resolve ${call.calleeExpression}`, source: call.source });
 };
 
 const createCallNode = (context: AnalyzeContext, expression: ts.CallExpression, awaited: boolean): CallNode => {
@@ -157,14 +162,7 @@ const createCallNode = (context: AnalyzeContext, expression: ts.CallExpression, 
     ...resolution,
   };
   context.supported += 1;
-  if (resolution.boundary === "unresolved" || resolution.boundary === "runtime") {
-    context.diagnostics.push({
-      severity: "warning",
-      code: resolution.boundary === "runtime" ? "RUNTIME_BINDING" : "UNRESOLVED_CALL",
-      message: `Cannot statically resolve ${call.calleeExpression}`,
-      source: call.source,
-    });
-  }
+  recordBoundaryDiagnostic(context, call);
   return call;
 };
 
@@ -272,7 +270,18 @@ const expressionNodes = (context: AnalyzeContext, expression: ts.Expression, awa
   }
   if (ts.isNewExpression(expression)) {
     const children = expression.arguments?.flatMap((argument) => expressionNodes(context, argument)) ?? [];
-    children.push(unsupported(context, expression, "Constructor calls are not supported yet."));
+    const call: CallNode = {
+      id: context.nextNodeId(),
+      kind: "call",
+      source: sourceSpan(context.sourceFile, context.fileId, expression),
+      calleeExpression: `new ${expression.expression.getText(context.sourceFile)}`,
+      args: expression.arguments?.map((argument) => ({ expression: argument.getText(context.sourceFile) })) ?? [],
+      awaited: false,
+      ...resolveCall(context, expression),
+    };
+    context.supported += 1;
+    recordBoundaryDiagnostic(context, call);
+    children.push(call);
     return children;
   }
   if (ts.isBinaryExpression(expression)) {

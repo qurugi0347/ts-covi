@@ -7,6 +7,7 @@ import { analyzeProject } from "./analyze.js";
 const fixture = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../fixtures/sequential/tsconfig.json");
 const controlFixture = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../fixtures/control/tsconfig.json");
 const annotationFixture = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../fixtures/annotations/tsconfig.json");
+const orderFixture = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../fixtures/order/tsconfig.json");
 
 const walk = (node: import("../model/flow.js").FlowNode): import("../model/flow.js").FlowNode[] => {
   const nested = node.kind === "sequence" ? node.children
@@ -67,4 +68,16 @@ test("keeps function and call annotations separate from code arguments", () => {
   assert.ok(document.diagnostics.some((entry) => entry.code === "INVALID_COVI_CALL"));
   assert.ok(document.diagnostics.some((entry) => entry.code === "ORPHAN_COVI_CALL"));
   assert.deepEqual(calls.map((entry) => entry.calleeExpression), ["charge", "one", "two", "send", "sendAll", "charge"]);
+});
+
+test("analyzes the independent order flow without inlining callbacks", () => {
+  const document = analyzeProject(orderFixture);
+  const order = document.functions.find((entry) => entry.name === "createOrder")!;
+  const calls = walk(order.body).filter((entry): entry is import("../model/flow.js").CallNode => entry.kind === "call");
+  assert.deepEqual(calls.map((entry) => entry.calleeExpression), ["validateItems", "reserveStock", "calculateTotal", "approvePayment", "saveOrder", "notifyOrder"]);
+  assert.deepEqual(calls.filter((entry) => entry.awaited).map((entry) => entry.calleeExpression), ["reserveStock", "approvePayment", "notifyOrder"]);
+  assert.equal(calls.find((entry) => entry.calleeExpression === "approvePayment")?.annotation?.label, "결제 승인");
+  const total = document.functions.find((entry) => entry.name === "calculateTotal")!;
+  assert.ok(walk(total.body).some((entry) => entry.kind === "call" && entry.calleeExpression === "items.reduce"));
+  assert.equal(walk(total.body).some((entry) => entry.kind === "call" && entry.calleeExpression.includes("sum")), false);
 });
