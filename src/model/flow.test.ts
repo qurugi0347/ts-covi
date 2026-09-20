@@ -38,3 +38,12 @@ test("rejects duplicate ids, unknown kinds and invalid spans", async () => {
   (rangedFunction.source as Record<string, unknown>).end = 999;
   assert.throws(() => validateFlowDocument(range), /exceeds the source length/);
 });
+
+test("rejects unknown or malformed annotation fields", async () => {
+  const document = await loadSample();
+  const fn = (document.functions as Array<Record<string, unknown>>)[0]!;
+  const body = fn.body as Record<string, unknown>;
+  const call = (body.children as Array<Record<string, unknown>>)[0]!;
+  call.annotation = { label: "hello", html: "<b>unsafe</b>" };
+  assert.throws(() => validateFlowDocument(document), /unknown fields/);
+});

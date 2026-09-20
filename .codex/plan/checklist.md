@@ -51,11 +51,11 @@ created: 2026-09-20
 
 ## M4 주석과 인자 — M4.1
 
-- [ ] 함수 @covi/@covi-root/@covi-group 읽기
-- [ ] call-site @covi-call 파싱과 정확한 대상 결합
-- [ ] 원문 args와 annotation 분리, label 우선순위 구현
-- [ ] 모호/고아/잘못된 JSON/중복 표현식/spread 진단
-- [ ] 주석 전후 코드 구조 불변 및 JSON의 인자 설명 결합 결과 검증
+- [x] 함수 @covi/@covi-root/@covi-group 읽기
+- [x] call-site @covi-call 파싱과 정확한 대상 결합
+- [x] 원문 args와 annotation 분리, label 우선순위 구현
+- [x] 모호/고아/잘못된 JSON/중복 표현식/spread 진단
+- [x] 주석 전후 코드 구조 불변 및 JSON의 인자 설명 결합 결과 검증
 
 ## M5 탐색 UI — M5.1~M5.2
 

@@ -6,6 +6,7 @@ import { analyzeProject } from "./analyze.js";
 
 const fixture = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../fixtures/sequential/tsconfig.json");
 const controlFixture = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../fixtures/control/tsconfig.json");
+const annotationFixture = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../fixtures/annotations/tsconfig.json");
 
 const walk = (node: import("../model/flow.js").FlowNode): import("../model/flow.js").FlowNode[] => {
   const nested = node.kind === "sequence" ? node.children
@@ -49,4 +50,21 @@ test("preserves branches, loop positions, jump targets and finally completion", 
   const override = document.functions.find((entry) => entry.name === "override")!;
   assert.ok(walk(override.body).some((entry) => entry.kind === "try" && entry.finallyOverrides));
   assert.ok(document.diagnostics.some((entry) => entry.code === "UNSUPPORTED_SYNTAX" && entry.message.includes("Generator")));
+});
+
+test("keeps function and call annotations separate from code arguments", () => {
+  const document = analyzeProject(annotationFixture);
+  const root = document.functions.find((entry) => entry.name === "processOrder")!;
+  assert.deepEqual(document.roots, [root.id]);
+  assert.equal(root.description, "주문을 처리한다.");
+  assert.deepEqual(root.groupPath, ["orders", "payment"]);
+  const calls = walk(root.body).filter((entry): entry is import("../model/flow.js").CallNode => entry.kind === "call");
+  const charge = calls.find((entry) => entry.annotation?.label === "결제 승인")!;
+  assert.deepEqual(charge.args, [{ expression: "token", annotation: "결제 토큰" }, { expression: "amount", annotation: "최종 금액" }]);
+  assert.ok(document.diagnostics.some((entry) => entry.code === "AMBIGUOUS_COVI_CALL"));
+  assert.ok(document.diagnostics.some((entry) => entry.code === "DUPLICATE_ANNOTATION_ARG"));
+  assert.ok(document.diagnostics.some((entry) => entry.code === "SPREAD_ANNOTATION_ARG"));
+  assert.ok(document.diagnostics.some((entry) => entry.code === "INVALID_COVI_CALL"));
+  assert.ok(document.diagnostics.some((entry) => entry.code === "ORPHAN_COVI_CALL"));
+  assert.deepEqual(calls.map((entry) => entry.calleeExpression), ["charge", "one", "two", "send", "sendAll", "charge"]);
 });

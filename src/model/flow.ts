@@ -212,7 +212,18 @@ function node(
           annotation: optionalString(argument.annotation, `${path}.args[${index}].annotation`),
         };
       });
-      const annotation = candidate.annotation === undefined ? undefined : object(candidate.annotation, `${path}.annotation`);
+      let annotation: CallAnnotation | undefined;
+      if (candidate.annotation !== undefined) {
+        const rawAnnotation = object(candidate.annotation, `${path}.annotation`);
+        const unknownFields = Object.keys(rawAnnotation).filter((key) => key !== "label" && key !== "args");
+        if (unknownFields.length) throw new FlowValidationError(`${path}.annotation has unknown fields: ${unknownFields.join(", ")}`);
+        let args: Record<string, string> | undefined;
+        if (rawAnnotation.args !== undefined) {
+          const rawArgs = object(rawAnnotation.args, `${path}.annotation.args`);
+          args = Object.fromEntries(Object.entries(rawArgs).map(([key, description]) => [key, string(description, `${path}.annotation.args.${key}`)]));
+        }
+        annotation = { label: optionalString(rawAnnotation.label, `${path}.annotation.label`), args };
+      }
       return {
         id,
         kind,
@@ -222,7 +233,7 @@ function node(
         awaited: candidate.awaited === true,
         targetFunctionId,
         boundary,
-        annotation: annotation as CallAnnotation | undefined,
+        annotation,
       };
     }
     case "branch":

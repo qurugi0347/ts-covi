@@ -35,6 +35,8 @@ type AnalyzeContext = {
   nextNodeId: () => string;
 };
 
+type ParsedCallAnnotation = { label?: string; args?: Record<string, string> };
+
 const posix = (value: string): string => value.split(path.sep).join("/");
 
 const isWithin = (root: string, target: string): boolean => {
@@ -87,6 +89,25 @@ const functionName = (node: ts.FunctionLikeDeclaration): string => {
 };
 
 const functionBody = (node: ts.FunctionLikeDeclaration): ts.ConciseBody | undefined => node.body;
+
+const functionMetadata = (sourceFile: ts.SourceFile, node: ts.FunctionLikeDeclaration): { description?: string; groupPath?: string[]; root: boolean } => {
+  const trivia = sourceFile.text.slice(node.getFullStart(), node.getStart(sourceFile));
+  const match = trivia.match(/\/\*\*([\s\S]*?)\*\/\s*$/);
+  if (!match) return { root: false };
+  const lines = match[1]!.split(/\r?\n/).map((line) => line.replace(/^\s*\*?\s?/, "").trim());
+  const description = lines.filter((line) => line && !line.startsWith("@")).join(" ") || undefined;
+  const tags = new Map(lines.filter((line) => line.startsWith("@")).map((line) => {
+    const [tag, ...rest] = line.slice(1).split(/\s+/);
+    return [tag, rest.join(" ").trim()] as const;
+  }));
+  const covi = tags.get("covi") || undefined;
+  const group = tags.get("covi-group");
+  return {
+    description: description ?? covi,
+    groupPath: group?.split("/").map((part) => part.trim()).filter(Boolean),
+    root: tags.has("covi-root"),
+  };
+};
 
 const sequence = (context: AnalyzeContext, owner: ts.Node, children: FlowNode[]): SequenceNode => ({
   id: context.nextNodeId(),
@@ -145,6 +166,83 @@ const createCallNode = (context: AnalyzeContext, expression: ts.CallExpression, 
     });
   }
   return call;
+};
+
+const unwrapCall = (expression: ts.Expression | undefined): ts.CallExpression | undefined => {
+  if (!expression) return undefined;
+  if (ts.isAwaitExpression(expression) || ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression) || ts.isNonNullExpression(expression)) {
+    return unwrapCall(expression.expression);
+  }
+  return ts.isCallExpression(expression) ? expression : undefined;
+};
+
+const topLevelCalls = (statement: ts.Statement): ts.CallExpression[] => {
+  if (ts.isVariableStatement(statement)) return statement.declarationList.declarations.map((declaration) => unwrapCall(declaration.initializer)).filter((call): call is ts.CallExpression => Boolean(call));
+  if (ts.isExpressionStatement(statement)) return [unwrapCall(statement.expression)].filter((call): call is ts.CallExpression => Boolean(call));
+  if (ts.isReturnStatement(statement)) return [unwrapCall(statement.expression)].filter((call): call is ts.CallExpression => Boolean(call));
+  return [];
+};
+
+const parseCallAnnotation = (context: AnalyzeContext, statement: ts.Statement): ParsedCallAnnotation | undefined => {
+  const source = context.sourceFile.text;
+  const triviaStart = statement.getFullStart();
+  const statementStart = statement.getStart(context.sourceFile);
+  const trivia = source.slice(triviaStart, statementStart);
+  const marker = trivia.lastIndexOf("@covi-call");
+  if (marker < 0) return undefined;
+  const lineStart = trivia.lastIndexOf("\n", marker) + 1;
+  const lineEndValue = trivia.indexOf("\n", marker);
+  const lineEnd = lineEndValue < 0 ? trivia.length : lineEndValue;
+  const prefix = trivia.slice(lineStart, marker);
+  const remainder = trivia.slice(lineEnd, trivia.length);
+  if (!prefix.includes("//") || remainder.trim()) return undefined;
+  const raw = trivia.slice(marker + "@covi-call".length, lineEnd).trim();
+  const diagnostic = (code: string, message: string) => context.diagnostics.push({ severity: "warning", code, message, source: sourceSpan(context.sourceFile, context.fileId, statement) });
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("annotation must be an object");
+    const record = parsed as Record<string, unknown>;
+    if (Object.keys(record).some((key) => key !== "label" && key !== "args")) throw new Error("only label and args are allowed");
+    if (record.label !== undefined && typeof record.label !== "string") throw new Error("label must be a string");
+    let args: Record<string, string> | undefined;
+    if (record.args !== undefined) {
+      if (!record.args || typeof record.args !== "object" || Array.isArray(record.args)) throw new Error("args must be an object");
+      const entries = Object.entries(record.args as Record<string, unknown>);
+      if (entries.some(([, value]) => typeof value !== "string")) throw new Error("arg descriptions must be strings");
+      args = Object.fromEntries(entries) as Record<string, string>;
+    }
+    return { label: record.label as string | undefined, args };
+  } catch (cause) {
+    diagnostic("INVALID_COVI_CALL", `Invalid @covi-call JSON: ${cause instanceof Error ? cause.message : String(cause)}`);
+    return undefined;
+  }
+};
+
+const applyCallAnnotation = (context: AnalyzeContext, statement: ts.Statement, nodes: FlowNode[]): FlowNode[] => {
+  const annotation = parseCallAnnotation(context, statement);
+  if (!annotation) return nodes;
+  const candidates = topLevelCalls(statement);
+  const source = sourceSpan(context.sourceFile, context.fileId, statement);
+  if (candidates.length !== 1) {
+    context.diagnostics.push({ severity: "warning", code: candidates.length ? "AMBIGUOUS_COVI_CALL" : "ORPHAN_COVI_CALL", message: candidates.length ? "@covi-call has multiple top-level call candidates." : "@covi-call has no supported top-level call.", source });
+    return nodes;
+  }
+  const candidate = candidates[0]!;
+  const call = nodes.find((node): node is CallNode => node.kind === "call" && node.source.start === candidate.getStart(context.sourceFile) && node.source.end === candidate.getEnd());
+  if (!call) {
+    context.diagnostics.push({ severity: "warning", code: "ORPHAN_COVI_CALL", message: "@covi-call target was not emitted.", source });
+    return nodes;
+  }
+  call.annotation = annotation;
+  for (const [expression, description] of Object.entries(annotation.args ?? {})) {
+    const matching = call.args.map((argument, index) => argument.expression === expression ? index : -1).filter((index) => index >= 0);
+    if (matching.length !== 1 || expression.startsWith("...")) {
+      context.diagnostics.push({ severity: "warning", code: matching.length > 1 ? "DUPLICATE_ANNOTATION_ARG" : expression.startsWith("...") ? "SPREAD_ANNOTATION_ARG" : "UNMATCHED_ANNOTATION_ARG", message: `Cannot uniquely match annotated argument: ${expression}`, source: call.source });
+      continue;
+    }
+    call.args[matching[0]!]!.annotation = description;
+  }
+  return nodes;
 };
 
 const expressionNodes = (context: AnalyzeContext, expression: ts.Expression, awaited = false): FlowNode[] => {
@@ -269,48 +367,49 @@ const loopParts = (context: AnalyzeContext, statement: ts.IterationStatement, la
 };
 
 const statementNodes = (context: AnalyzeContext, statement: ts.Statement, label?: string): { nodes: FlowNode[]; terminates: boolean } => {
+  const finish = (nodes: FlowNode[], terminates: boolean) => ({ nodes: applyCallAnnotation(context, statement, nodes), terminates });
   if (ts.isVariableStatement(statement)) {
     const calls = statement.declarationList.declarations.flatMap((declaration) => declaration.initializer ? expressionNodes(context, declaration.initializer) : []);
     context.supported += 1;
-    return { nodes: [...calls, { id: context.nextNodeId(), kind: "statement", source: sourceSpan(context.sourceFile, context.fileId, statement), code: statement.getText(context.sourceFile) }], terminates: false };
+    return finish([...calls, { id: context.nextNodeId(), kind: "statement", source: sourceSpan(context.sourceFile, context.fileId, statement), code: statement.getText(context.sourceFile) }], false);
   }
   if (ts.isExpressionStatement(statement)) {
     const calls = expressionNodes(context, statement.expression);
     const onlyCall = ts.isCallExpression(statement.expression) || (ts.isAwaitExpression(statement.expression) && ts.isCallExpression(statement.expression.expression));
-    if (onlyCall) return { nodes: calls, terminates: false };
+    if (onlyCall) return finish(calls, false);
     context.supported += 1;
-    return { nodes: [...calls, { id: context.nextNodeId(), kind: "statement", source: sourceSpan(context.sourceFile, context.fileId, statement), code: statement.getText(context.sourceFile) }], terminates: false };
+    return finish([...calls, { id: context.nextNodeId(), kind: "statement", source: sourceSpan(context.sourceFile, context.fileId, statement), code: statement.getText(context.sourceFile) }], false);
   }
   if (ts.isReturnStatement(statement)) {
     const calls = statement.expression ? expressionNodes(context, statement.expression) : [];
     context.supported += 1;
-    return { nodes: [...calls, { id: context.nextNodeId(), kind: "return", source: sourceSpan(context.sourceFile, context.fileId, statement), expression: statement.expression?.getText(context.sourceFile) }], terminates: true };
+    return finish([...calls, { id: context.nextNodeId(), kind: "return", source: sourceSpan(context.sourceFile, context.fileId, statement), expression: statement.expression?.getText(context.sourceFile) }], true);
   }
   if (ts.isThrowStatement(statement)) {
     const calls = expressionNodes(context, statement.expression);
     context.supported += 1;
-    return { nodes: [...calls, { id: context.nextNodeId(), kind: "throw", source: sourceSpan(context.sourceFile, context.fileId, statement), expression: statement.expression.getText(context.sourceFile) }], terminates: true };
+    return finish([...calls, { id: context.nextNodeId(), kind: "throw", source: sourceSpan(context.sourceFile, context.fileId, statement), expression: statement.expression.getText(context.sourceFile) }], true);
   }
   if (ts.isIfStatement(statement)) {
     const before = expressionNodes(context, statement.expression);
     const then = asBlock(context, statement.thenStatement);
     const otherwise = statement.elseStatement ? asBlock(context, statement.elseStatement) : undefined;
     context.supported += 1;
-    return {
-      nodes: [...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, statement), condition: statement.expression.getText(context.sourceFile), then: then.sequence, else: otherwise?.sequence }],
-      terminates: then.terminates && Boolean(otherwise?.terminates),
-    };
+    return finish([...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, statement), condition: statement.expression.getText(context.sourceFile), then: then.sequence, else: otherwise?.sequence }], then.terminates && Boolean(otherwise?.terminates));
   }
-  if (ts.isIterationStatement(statement, false)) return { nodes: [loopParts(context, statement, label)], terminates: false };
+  if (ts.isIterationStatement(statement, false)) return finish([loopParts(context, statement, label)], false);
   if (ts.isBreakStatement(statement) || ts.isContinueStatement(statement)) {
     const targetLabel = statement.label?.text;
     const target = targetLabel ? context.jumpTargets.findLast((entry) => entry.label === targetLabel) : context.jumpTargets.at(-1);
     context.supported += 1;
-    return { nodes: [{ id: context.nextNodeId(), kind: ts.isBreakStatement(statement) ? "break" : "continue", source: sourceSpan(context.sourceFile, context.fileId, statement), targetId: target?.id, targetLabel }], terminates: true };
+    return finish([{ id: context.nextNodeId(), kind: ts.isBreakStatement(statement) ? "break" : "continue", source: sourceSpan(context.sourceFile, context.fileId, statement), targetId: target?.id, targetLabel }], true);
   }
   if (ts.isLabeledStatement(statement)) {
-    if (ts.isIterationStatement(statement.statement, false)) return statementNodes(context, statement.statement, statement.label.text);
-    return { nodes: [unsupported(context, statement, "Only labels attached to loops are supported.")], terminates: false };
+    if (ts.isIterationStatement(statement.statement, false)) {
+      const result = statementNodes(context, statement.statement, statement.label.text);
+      return finish(result.nodes, result.terminates);
+    }
+    return finish([unsupported(context, statement, "Only labels attached to loops are supported.")], false);
   }
   if (ts.isTryStatement(statement)) {
     const body = analyzeStatements(context, statement.tryBlock, statement.tryBlock.statements);
@@ -318,19 +417,16 @@ const statementNodes = (context: AnalyzeContext, statement: ts.Statement, label?
     const finallyResult = statement.finallyBlock ? analyzeStatements(context, statement.finallyBlock, statement.finallyBlock.statements) : undefined;
     context.supported += 1;
     const finallyOverrides = Boolean(finallyResult?.terminates);
-    return {
-      nodes: [{
+    return finish([{
         id: context.nextNodeId(), kind: "try", source: sourceSpan(context.sourceFile, context.fileId, statement), body: body.sequence,
         catch: catchResult ? { variable: statement.catchClause?.variableDeclaration?.name.getText(context.sourceFile), body: catchResult.sequence } : undefined,
         finally: finallyResult?.sequence,
         finallyOverrides: finallyOverrides || undefined,
-      }],
-      terminates: finallyOverrides || (body.terminates && (!catchResult || catchResult.terminates)),
-    };
+      }], finallyOverrides || (body.terminates && (!catchResult || catchResult.terminates)));
   }
-  if (ts.isBlock(statement)) return { nodes: [analyzeStatements(context, statement, statement.statements).sequence], terminates: false };
-  if (ts.isEmptyStatement(statement)) return { nodes: [], terminates: false };
-  return { nodes: [unsupported(context, statement, `${ts.SyntaxKind[statement.kind]} is handled in a later milestone.`)], terminates: false };
+  if (ts.isBlock(statement)) return finish([analyzeStatements(context, statement, statement.statements).sequence], false);
+  if (ts.isEmptyStatement(statement)) return finish([], false);
+  return finish([unsupported(context, statement, `${ts.SyntaxKind[statement.kind]} is handled in a later milestone.`)], false);
 };
 
 const analyzeBody = (context: AnalyzeContext, body: ts.ConciseBody): SequenceNode => {
@@ -400,6 +496,7 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     };
     const signature = checker.getSignatureFromDeclaration(entry.declaration);
     const body = analyzeBody(context, functionBody(entry.declaration)!);
+    const metadata = functionMetadata(entry.sourceFile, entry.declaration);
     supported += context.supported;
     unsupportedCount += context.unsupported;
     return {
@@ -407,6 +504,8 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
       name: functionName(entry.declaration),
       signature: signature ? checker.signatureToString(signature) : entry.declaration.getText(entry.sourceFile).slice(0, 120),
       source: sourceSpan(entry.sourceFile, entry.fileId, entry.declaration),
+      description: metadata.description,
+      groupPath: metadata.groupPath,
       body,
     };
   });
@@ -417,7 +516,7 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     project: { name: path.basename(projectRoot), tsconfig: posix(path.relative(projectRoot, absoluteConfig)) || "tsconfig.json" },
     files,
     functions,
-    roots: functions.map((entry) => entry.id),
+    roots: indexed.filter((entry) => functionMetadata(entry.sourceFile, entry.declaration).root).map((entry) => entry.id),
     diagnostics,
     coverage: {
       status: unsupportedCount || unresolved ? "partial" : "complete",
