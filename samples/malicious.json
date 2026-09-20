@@ -1,0 +1,19 @@
+{
+  "formatVersion": 1,
+  "producerVersion": "0.1.0",
+  "project": { "name": "malicious", "tsconfig": "tsconfig.json" },
+  "files": [{ "id": "file:sample.ts", "path": "sample.ts", "contentHash": "manual", "source": "function hello() { console.log('hello'); }" }],
+  "functions": [{
+    "id": "fn:hello",
+    "name": "hello",
+    "signature": "hello(): void",
+    "source": { "fileId": "file:sample.ts", "start": 0, "end": 42, "startLine": 1, "startColumn": 1, "endLine": 1, "endColumn": 43 },
+    "body": { "id": "node:body", "kind": "sequence", "source": { "fileId": "file:sample.ts", "start": 17, "end": 42, "startLine": 1, "startColumn": 18, "endLine": 1, "endColumn": 43 }, "children": [{
+      "id": "node:call", "kind": "call", "source": { "fileId": "file:sample.ts", "start": 19, "end": 40, "startLine": 1, "startColumn": 20, "endLine": 1, "endColumn": 41 },
+      "calleeExpression": "console.log", "args": [{ "expression": "'hello'" }], "awaited": false, "boundary": "external", "annotation": { "label": "<img src=x onerror=alert(1)>" }
+    }] }
+  }],
+  "roots": ["fn:hello"],
+  "diagnostics": [],
+  "coverage": { "status": "complete", "files": { "scanned": 1, "analyzed": 1, "skipped": 0 }, "functions": { "discovered": 1, "analyzed": 1 }, "nodes": { "supported": 1, "unsupported": 0 } }
+}

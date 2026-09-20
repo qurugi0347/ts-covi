@@ -33,6 +33,11 @@ export function* unsupportedGenerator() {
   yield 1;
 }
 
+export function recursive(value: number): number {
+  if (value <= 0) return 0;
+  return recursive(value - 1);
+}
+
 function start() { return 0; }
 function keepGoing(value: number) { return value < 5; }
 function next(value: number) { return value + 1; }
