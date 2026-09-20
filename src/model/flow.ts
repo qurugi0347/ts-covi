@@ -289,7 +289,7 @@ export function validateFlowDocument(value: unknown): FlowDocument {
     const id = string(file.id, `document.files[${index}].id`);
     if (fileLengths.has(id)) throw new FlowValidationError(`duplicate file id: ${id}`);
     const path = string(file.path, `document.files[${index}].path`);
-    if (path.startsWith("/") || path.includes("\\") || path.split("/").some((part) => !part || part === "." || part === "..")) {
+    if (path.startsWith("/") || /^[A-Za-z]:\//.test(path) || path.includes("\\") || path.split("/").some((part) => !part || part === "." || part === "..")) {
       throw new FlowValidationError(`document.files[${index}].path must be project-relative`);
     }
     const source = string(file.source, `document.files[${index}].source`);

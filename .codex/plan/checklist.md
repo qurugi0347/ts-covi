@@ -33,13 +33,13 @@ created: 2026-09-20
 
 ## M2 순차 분석 수직 흐름 — M2.1~M2.3
 
-- [ ] tsconfig/ignore 및 소스/해석 전용 파일 구분
-- [ ] project references 미지원 진단 및 범위 밖 경로 처리
-- [ ] 함수 인덱스와 충돌 없는 snapshot ID
-- [ ] 호출·중첩 호출·변수 초기화·일반 대입/증감·return·await 추출
-- [ ] 직접 호출/import alias 해석 및 외부/미해결 경계
-- [ ] CLI 인자, exit code, 원자적 JSON 저장
-- [ ] 실제 fixture → JSON → HTML 흐름과 저장 실패 보존 테스트
+- [x] tsconfig/ignore 및 소스/해석 전용 파일 구분
+- [x] project references 미지원 진단 및 범위 밖 경로 처리
+- [x] 함수 인덱스와 충돌 없는 snapshot ID
+- [x] 호출·중첩 호출·변수 초기화·일반 대입/증감·return·await 추출
+- [x] 직접 호출/import alias 해석 및 외부/미해결 경계
+- [x] CLI 인자, exit code, 원자적 JSON 저장
+- [x] 실제 fixture → JSON → HTML 흐름과 저장 실패 보존 테스트
 
 ## M3 함수 내부 제어 구조 — M3.1~M3.2
 
