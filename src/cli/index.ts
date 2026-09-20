@@ -6,12 +6,14 @@ import { analyzeProject } from "../analyzer/analyze.js";
 import { validateFlowDocument } from "../model/flow.js";
 import { embedFlowDocument, loadViewerTemplate } from "./viewer.js";
 
-const usage = "Usage: ts-covi analyze --project ./tsconfig.json --out ./.covi/flow.json";
+const usage = "Usage: ts-covi analyze --project ./tsconfig.json --out ./.covi/flow.json [--entry ./scripts/job.ts]";
 
 const option = (args: string[], name: string): string | undefined => {
   const index = args.indexOf(name);
   return index >= 0 ? args[index + 1] : undefined;
 };
+
+const options = (args: string[], name: string): string[] => args.flatMap((value, index) => value === name && args[index + 1] ? [args[index + 1]!] : []);
 
 export const resolveOutputPath = (project: string, out = ".covi/flow.json"): string =>
   path.resolve(path.dirname(path.resolve(project)), out);
@@ -93,7 +95,7 @@ export async function run(args: string[], viewerTemplate?: string): Promise<numb
     await refuseSymlink(outputPath);
     await refuseSymlink(viewerPath);
     const template = viewerTemplate ?? await loadViewerTemplate();
-    const document = analyzeProject(projectPath, [outputPath, viewerPath]);
+    const document = analyzeProject(projectPath, [outputPath, viewerPath], options(args, "--entry"));
     validateFlowDocument(document);
     const json = `${JSON.stringify(document, null, 2)}\n`;
     const html = embedFlowDocument(template, document);

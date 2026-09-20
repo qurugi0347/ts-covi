@@ -526,7 +526,7 @@ export function validateFlowDocument(value: unknown): FlowDocument {
   if ((modules === undefined) !== (moduleCoverage === undefined) || moduleCoverage && (moduleCoverage.analyzed !== modules?.length || moduleCoverage.nodes.supported !== actualModuleNodes.supported || moduleCoverage.nodes.unsupported !== actualModuleNodes.unsupported)) {
     throw new FlowValidationError("document.coverage.modules is inconsistent");
   }
-  if (status === "complete" && (nodeCoverage.unsupported > 0 || (moduleCoverage?.nodes.unsupported ?? 0) > 0 || diagnostics.length > 0)) {
+  if (status === "complete" && (nodeCoverage.unsupported > 0 || (moduleCoverage?.nodes.unsupported ?? 0) > 0 || diagnostics.length > 0 || entrypoints?.some((entry) => entry.status === "partial"))) {
     throw new FlowValidationError("complete coverage cannot contain unsupported nodes or diagnostics");
   }
   return {

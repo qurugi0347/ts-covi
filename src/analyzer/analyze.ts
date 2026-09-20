@@ -10,10 +10,12 @@ import {
   type CallNode,
   type FlowDocument,
   type FlowFunction,
+  type FlowModule,
   type FlowNode,
   type SequenceNode,
   type SourceSpan,
 } from "../model/flow.js";
+import { discoverScripts } from "./scripts.js";
 
 const PRODUCER_VERSION = "0.1.0";
 
@@ -495,18 +497,20 @@ const analyzeBody = (context: AnalyzeContext, body: ts.ConciseBody): SequenceNod
   return analyzeStatements(context, body, body.statements).sequence;
 };
 
-export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = []): FlowDocument {
+export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [], explicitEntries: string[] = []): FlowDocument {
   const absoluteConfig = path.resolve(tsconfigPath);
   const configResult = ts.readConfigFile(absoluteConfig, ts.sys.readFile);
   if (configResult.error) throw new Error(ts.flattenDiagnosticMessageText(configResult.error.messageText, "\n"));
   const projectRoot = realpathSync(path.dirname(absoluteConfig));
   const parsed = ts.parseJsonConfigFileContent(configResult.config, ts.sys, projectRoot, { noEmit: true }, absoluteConfig);
   if (parsed.errors.length) throw new Error(parsed.errors.map((entry) => ts.flattenDiagnosticMessageText(entry.messageText, "\n")).join("\n"));
-  const program = ts.createProgram({ rootNames: parsed.fileNames, options: parsed.options, projectReferences: parsed.projectReferences });
+  const ignoreMatcher = createIgnore().add(readIgnorePatterns(projectRoot));
+  const scripts = discoverScripts(projectRoot, explicitEntries, (relative) => ignoreMatcher.ignores(relative));
+  const scriptFiles = scripts.flatMap((entry) => entry.absolutePath ? [entry.absolutePath] : []);
+  const program = ts.createProgram({ rootNames: [...new Set([...parsed.fileNames, ...scriptFiles])], options: parsed.options, projectReferences: parsed.projectReferences });
   const checker = program.getTypeChecker();
   const diagnostics: FlowDocument["diagnostics"] = [];
   if (parsed.projectReferences?.length) diagnostics.push({ severity: "warning", code: "PROJECT_REFERENCES_UNSUPPORTED", message: "Project references are not analyzed as separate projects." });
-  const ignoreMatcher = createIgnore().add(readIgnorePatterns(projectRoot));
   const excluded = excludedPaths.map((entry) => path.resolve(entry));
   let skipped = 0;
   const sourceFiles = program.getSourceFiles().filter((sourceFile) => {
@@ -603,6 +607,52 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
       reasons: [],
     };
   });
+  const scriptSourceFiles = new Map(sourceFiles.map((sourceFile) => [realpathSync(sourceFile.fileName), sourceFile]));
+  const modules: FlowModule[] = [];
+  let moduleSupported = 0;
+  let moduleUnsupported = 0;
+  for (const absolutePath of new Set(scriptFiles)) {
+    const sourceFile = scriptSourceFiles.get(absolutePath);
+    if (!sourceFile) continue;
+    const relativePath = posix(path.relative(projectRoot, absolutePath));
+    const fileId = fileIds.get(relativePath)!;
+    const moduleId = `module:${relativePath}`;
+    let counter = 0;
+    const context: AnalyzeContext = {
+      checker,
+      functionIds,
+      sourceFile,
+      fileId,
+      diagnostics,
+      supported: 0,
+      unsupported: 0,
+      jumpTargets: [],
+      nextNodeId: () => `${moduleId}:node:${counter++}`,
+    };
+    const executable = sourceFile.statements.filter((statement) => !ts.isFunctionDeclaration(statement) && !ts.isInterfaceDeclaration(statement) && !ts.isTypeAliasDeclaration(statement) && !ts.isModuleDeclaration(statement));
+    const body = analyzeStatements(context, sourceFile, executable).sequence;
+    modules.push({ id: moduleId, source: sourceSpan(sourceFile, fileId, sourceFile), body });
+    moduleSupported += context.supported;
+    moduleUnsupported += context.unsupported;
+  }
+  for (const script of scripts) {
+    const moduleId = script.relativePath ? `module:${script.relativePath}` : undefined;
+    const module = moduleId ? modules.find((entry) => entry.id === moduleId) : undefined;
+    const reason = script.reason ?? (!module ? `Entry file was not included: ${script.relativePath}` : undefined);
+    if (reason) diagnostics.push({ severity: "warning", code: "ENTRYPOINT_UNRESOLVED", message: reason });
+    entrypoints.push({
+      id: `entry:script:${script.origin.kind}:${script.origin.name}:${script.relativePath ?? script.command ?? "unresolved"}`,
+      kind: "script",
+      label: script.origin.name,
+      path: script.relativePath,
+      source: module?.source,
+      command: script.command,
+      origin: script.origin,
+      targets: [{ role: "module", moduleId: module?.id, source: module?.source, expression: script.relativePath ?? script.command ?? script.origin.name, status: reason ? "partial" : "complete", reason }],
+      status: reason ? "partial" : "complete",
+      reasons: reason ? [reason] : [],
+    });
+  }
   const unresolved = diagnostics.some((entry) => entry.code !== "PROJECT_REFERENCES_UNSUPPORTED" || parsed.projectReferences?.length);
   const result: FlowDocument = {
     formatVersion: FORMAT_VERSION,
@@ -610,6 +660,7 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     project: { name: path.basename(projectRoot), tsconfig: posix(path.relative(projectRoot, absoluteConfig)) || "tsconfig.json" },
     files,
     functions,
+    modules,
     entrypoints,
     roots: roots.map((entry) => entry.id),
     diagnostics,
@@ -618,6 +669,7 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
       files: { scanned: sourceFiles.length + skipped, analyzed: sourceFiles.length, skipped },
       functions: { discovered: indexed.length, analyzed: functions.length },
       nodes: { supported, unsupported: unsupportedCount },
+      modules: { analyzed: modules.length, nodes: { supported: moduleSupported, unsupported: moduleUnsupported } },
     },
   };
   return validateFlowDocument(result);

@@ -24,11 +24,11 @@ status: draft
 
 ## Phase 2 — 스크립트 (S1)
 
-- [ ] S1 package scripts/bin/--entry 입력 탐지와 경로 경계·include 밖 Program 입력
-- [ ] S1 modules 계약·validator·moduleCoverage·최상위 분석·UI 선택
-- [ ] S1 검증: 초기화→await→main, IIFE, 함수 본문 중복 없음, 별칭 module 공유
-- [ ] S1 검증: 복잡한 shell/bin JS partial, 명시 파일 오류 exit 1, 외부/ignore 경로, 구형 JSON
-- [ ] S1 검증: script 선택→함수 펼침→JSON 교체 및 source 없는 미해결 표시
+- [x] S1 package scripts/bin/--entry 입력 탐지와 경로 경계·include 밖 Program 입력
+- [x] S1 modules 계약·validator·moduleCoverage·최상위 분석·UI 선택
+- [x] S1 검증: 초기화→await→main, IIFE, 함수 본문 중복 없음, 별칭 module 공유
+- [x] S1 검증: 복잡한 shell/bin JS partial, 명시 파일 오류 exit 1, 외부/ignore 경로, 구형 JSON
+- [x] S1 검증: script 선택→함수 펼침→JSON 교체 및 source 없는 미해결 표시
 
 ## Phase 3 — API
 
