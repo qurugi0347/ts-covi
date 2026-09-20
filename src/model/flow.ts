@@ -454,6 +454,10 @@ export function validateFlowDocument(value: unknown): FlowDocument {
     const reasons = array(raw.reasons, `${entryPath}.reasons`).map((reason, reasonIndex) => string(reason, `${entryPath}.reasons[${reasonIndex}]`));
     if (kind === "endpoint" && !method) throw new FlowValidationError(`${entryPath}.method is required for endpoints`);
     if (kind === "script" && !origin) throw new FlowValidationError(`${entryPath}.origin is required for scripts`);
+    if ((kind === "endpoint" || kind === "page") && status === "complete" && pathValue === undefined) throw new FlowValidationError(`${entryPath}.path is required for complete routes`);
+    if (kind === "script" && status === "complete" && (!pathValue || targets.some((target) => target.role !== "module" || !target.moduleId))) throw new FlowValidationError(`${entryPath} complete script requires module targets and a path`);
+    if (kind === "manual" && (framework || pathValue || method || origin)) throw new FlowValidationError(`${entryPath} manual entrypoint has invalid route metadata`);
+    if (kind !== "script" && origin) throw new FlowValidationError(`${entryPath}.origin is only valid for scripts`);
     if (kind !== "script" && !source) throw new FlowValidationError(`${entryPath}.source is required`);
     if (status === "complete" && (!targets.length || targets.some((target) => target.status === "partial") || reasons.length)) throw new FlowValidationError(`${entryPath} complete entrypoint is inconsistent`);
     if (status === "partial" && !reasons.length && !targets.some((target) => target.status === "partial")) throw new FlowValidationError(`${entryPath}.reasons is required for partial entrypoints`);
