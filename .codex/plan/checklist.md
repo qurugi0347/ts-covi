@@ -17,8 +17,8 @@ status: draft
 
 ## Phase 1 — 계약과 UI
 
-- [ ] E1 entrypoints v1 optional 확장·검증·수동 roots 매핑
-- [ ] E1 검증: 구형 JSON·깨진 참조·복수 target assertion
+- [x] E1 entrypoints v1 optional 확장·검증·수동 roots 매핑
+- [x] E1 검증: 구형 JSON·깨진 참조·복수 target assertion
 - [ ] E2 진입점/전체 함수 모드·그룹·검색·선택 분리
 - [ ] E2 검증: 0건·복수 URL·JSON 교체·source-only·키보드/320px
 

@@ -589,6 +589,20 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
       body,
     };
   });
+  const roots = indexed.filter((entry) => functionMetadata(entry.sourceFile, entry.declaration).root);
+  const entrypoints: FlowDocument["entrypoints"] = roots.map((entry) => {
+    const metadata = functionMetadata(entry.sourceFile, entry.declaration);
+    const name = functionName(entry.declaration);
+    return {
+      id: `entry:manual:${entry.id}`,
+      kind: "manual",
+      label: metadata.description ?? name,
+      source: sourceSpan(entry.sourceFile, entry.fileId, entry.declaration),
+      targets: [{ role: "handler", functionId: entry.id, expression: name, status: "complete" }],
+      status: "complete",
+      reasons: [],
+    };
+  });
   const unresolved = diagnostics.some((entry) => entry.code !== "PROJECT_REFERENCES_UNSUPPORTED" || parsed.projectReferences?.length);
   const result: FlowDocument = {
     formatVersion: FORMAT_VERSION,
@@ -596,7 +610,8 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     project: { name: path.basename(projectRoot), tsconfig: posix(path.relative(projectRoot, absoluteConfig)) || "tsconfig.json" },
     files,
     functions,
-    roots: indexed.filter((entry) => functionMetadata(entry.sourceFile, entry.declaration).root).map((entry) => entry.id),
+    entrypoints,
+    roots: roots.map((entry) => entry.id),
     diagnostics,
     coverage: {
       status: unsupportedCount || unresolved ? "partial" : "complete",

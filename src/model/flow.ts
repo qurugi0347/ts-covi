@@ -98,12 +98,45 @@ export type FlowFunction = {
   body: SequenceNode;
 };
 
+export type FlowModule = {
+  id: string;
+  source: SourceSpan;
+  body: SequenceNode;
+};
+
+export type EntryPointTarget = {
+  role: "handler" | "middleware" | "component" | "loader" | "action" | "module";
+  functionId?: string;
+  moduleId?: string;
+  source?: SourceSpan;
+  expression: string;
+  status: CoverageStatus;
+  reason?: string;
+};
+
+export type EntryPoint = {
+  id: string;
+  kind: "endpoint" | "page" | "script" | "manual";
+  framework?: "nestjs" | "express" | "react-router" | "vue-router";
+  label: string;
+  path?: string;
+  method?: string;
+  source?: SourceSpan;
+  command?: string;
+  origin?: { kind: "package-script" | "bin" | "explicit"; name: string };
+  targets: EntryPointTarget[];
+  status: CoverageStatus;
+  reasons: string[];
+};
+
 export type FlowDocument = {
   formatVersion: 1;
   producerVersion: string;
   project: { name: string; tsconfig: string };
   files: Array<{ id: string; path: string; contentHash: string; source: string }>;
   functions: FlowFunction[];
+  modules?: FlowModule[];
+  entrypoints?: EntryPoint[];
   roots: string[];
   diagnostics: Array<{
     severity: DiagnosticSeverity;
@@ -116,6 +149,7 @@ export type FlowDocument = {
     files: { scanned: number; analyzed: number; skipped: number };
     functions: { discovered: number; analyzed: number };
     nodes: { supported: number; unsupported: number };
+    modules?: { analyzed: number; nodes: { supported: number; unsupported: number } };
   };
 };
 
@@ -175,6 +209,12 @@ const span = (value: unknown, path: string, fileLengths: Map<string, number>): S
 
 const optionalString = (value: unknown, path: string): string | undefined =>
   value === undefined ? undefined : string(value, path);
+
+const enumValue = <T extends string>(value: unknown, path: string, allowed: readonly T[]): T => {
+  const result = string(value, path) as T;
+  if (!allowed.includes(result)) throw new FlowValidationError(`${path} is invalid`);
+  return result;
+};
 
 function node(
   value: unknown,
@@ -355,16 +395,89 @@ export function validateFlowDocument(value: unknown): FlowDocument {
       body,
     };
   });
+  const moduleIds = new Set<string>();
+  const modules = candidate.modules === undefined ? undefined : array(candidate.modules, "document.modules").map((entry, index) => {
+    const module = object(entry, `document.modules[${index}]`);
+    const id = string(module.id, `document.modules[${index}].id`);
+    if (moduleIds.has(id)) throw new FlowValidationError(`duplicate module id: ${id}`);
+    moduleIds.add(id);
+    const body = node(module.body, `document.modules[${index}].body`, fileLengths, nodeIds, [], referencedFunctions);
+    if (body.kind !== "sequence") throw new FlowValidationError(`document.modules[${index}].body must be a sequence`);
+    return { id, source: span(module.source, `document.modules[${index}].source`, fileLengths), body };
+  });
   const roots = array(candidate.roots, "document.roots").map((entry, index) => string(entry, `document.roots[${index}]`));
   if (new Set(roots).size !== roots.length) throw new FlowValidationError("document.roots contains duplicate ids");
   for (const id of [...roots, ...referencedFunctions]) {
     if (!functionIds.has(id)) throw new FlowValidationError(`unknown function reference: ${id}`);
   }
+  const entryIds = new Set<string>();
+  const entrypoints = candidate.entrypoints === undefined ? undefined : array(candidate.entrypoints, "document.entrypoints").map((entry, index) => {
+    const raw = object(entry, `document.entrypoints[${index}]`);
+    const entryPath = `document.entrypoints[${index}]`;
+    const id = string(raw.id, `${entryPath}.id`);
+    if (entryIds.has(id)) throw new FlowValidationError(`duplicate entrypoint id: ${id}`);
+    entryIds.add(id);
+    const kind = enumValue(raw.kind, `${entryPath}.kind`, ["endpoint", "page", "script", "manual"] as const);
+    const framework = raw.framework === undefined ? undefined : enumValue(raw.framework, `${entryPath}.framework`, ["nestjs", "express", "react-router", "vue-router"] as const);
+    const status = enumValue(raw.status, `${entryPath}.status`, ["complete", "partial"] as const);
+    const source = raw.source === undefined ? undefined : span(raw.source, `${entryPath}.source`, fileLengths);
+    const method = optionalString(raw.method, `${entryPath}.method`);
+    const pathValue = optionalString(raw.path, `${entryPath}.path`);
+    let origin: EntryPoint["origin"];
+    if (raw.origin !== undefined) {
+      const value = object(raw.origin, `${entryPath}.origin`);
+      origin = { kind: enumValue(value.kind, `${entryPath}.origin.kind`, ["package-script", "bin", "explicit"] as const), name: string(value.name, `${entryPath}.origin.name`) };
+    }
+    const targets = array(raw.targets, `${entryPath}.targets`).map((target, targetIndex) => {
+      const value = object(target, `${entryPath}.targets[${targetIndex}]`);
+      const targetPath = `${entryPath}.targets[${targetIndex}]`;
+      const targetStatus = enumValue(value.status, `${targetPath}.status`, ["complete", "partial"] as const);
+      const functionId = optionalString(value.functionId, `${targetPath}.functionId`);
+      const moduleId = optionalString(value.moduleId, `${targetPath}.moduleId`);
+      const targetSource = value.source === undefined ? undefined : span(value.source, `${targetPath}.source`, fileLengths);
+      const reason = optionalString(value.reason, `${targetPath}.reason`);
+      if (functionId && moduleId) throw new FlowValidationError(`${targetPath} cannot reference both functionId and moduleId`);
+      if (functionId && !functionIds.has(functionId)) throw new FlowValidationError(`unknown function reference: ${functionId}`);
+      if (moduleId && !moduleIds.has(moduleId)) throw new FlowValidationError(`unknown module reference: ${moduleId}`);
+      if (targetStatus === "complete" && !functionId && !moduleId && !targetSource) throw new FlowValidationError(`${targetPath} complete target requires a reference`);
+      if (targetStatus === "partial" && !reason) throw new FlowValidationError(`${targetPath}.reason is required for partial targets`);
+      return {
+        role: enumValue(value.role, `${targetPath}.role`, ["handler", "middleware", "component", "loader", "action", "module"] as const),
+        functionId,
+        moduleId,
+        source: targetSource,
+        expression: string(value.expression, `${targetPath}.expression`),
+        status: targetStatus,
+        reason,
+      };
+    });
+    const reasons = array(raw.reasons, `${entryPath}.reasons`).map((reason, reasonIndex) => string(reason, `${entryPath}.reasons[${reasonIndex}]`));
+    if (kind === "endpoint" && !method) throw new FlowValidationError(`${entryPath}.method is required for endpoints`);
+    if (kind === "script" && !origin) throw new FlowValidationError(`${entryPath}.origin is required for scripts`);
+    if (kind !== "script" && !source) throw new FlowValidationError(`${entryPath}.source is required`);
+    if (status === "complete" && (!targets.length || targets.some((target) => target.status === "partial") || reasons.length)) throw new FlowValidationError(`${entryPath} complete entrypoint is inconsistent`);
+    if (status === "partial" && !reasons.length && !targets.some((target) => target.status === "partial")) throw new FlowValidationError(`${entryPath}.reasons is required for partial entrypoints`);
+    return {
+      id,
+      kind,
+      framework,
+      label: string(raw.label, `${entryPath}.label`),
+      path: pathValue,
+      method,
+      source,
+      command: optionalString(raw.command, `${entryPath}.command`),
+      origin,
+      targets,
+      status,
+      reasons,
+    };
+  });
   const project = object(candidate.project, "document.project");
   const coverage = object(candidate.coverage, "document.coverage");
   const coverageFiles = object(coverage.files, "document.coverage.files");
   const coverageFunctions = object(coverage.functions, "document.coverage.functions");
   const coverageNodes = object(coverage.nodes, "document.coverage.nodes");
+  const moduleCoverageValue = coverage.modules === undefined ? undefined : object(coverage.modules, "document.coverage.modules");
   const status = string(coverage.status, "document.coverage.status") as CoverageStatus;
   if (status !== "complete" && status !== "partial") throw new FlowValidationError("document.coverage.status is invalid");
   const diagnostics = array(candidate.diagnostics, "document.diagnostics").map((entry, index) => {
@@ -381,6 +494,13 @@ export function validateFlowDocument(value: unknown): FlowDocument {
   const fileCoverage = { scanned: number(coverageFiles.scanned, "document.coverage.files.scanned"), analyzed: number(coverageFiles.analyzed, "document.coverage.files.analyzed"), skipped: number(coverageFiles.skipped, "document.coverage.files.skipped") };
   const functionCoverage = { discovered: number(coverageFunctions.discovered, "document.coverage.functions.discovered"), analyzed: number(coverageFunctions.analyzed, "document.coverage.functions.analyzed") };
   const nodeCoverage = { supported: number(coverageNodes.supported, "document.coverage.nodes.supported"), unsupported: number(coverageNodes.unsupported, "document.coverage.nodes.unsupported") };
+  const moduleCoverage = moduleCoverageValue === undefined ? undefined : {
+    analyzed: number(moduleCoverageValue.analyzed, "document.coverage.modules.analyzed"),
+    nodes: (() => {
+      const nodes = object(moduleCoverageValue.nodes, "document.coverage.modules.nodes");
+      return { supported: number(nodes.supported, "document.coverage.modules.nodes.supported"), unsupported: number(nodes.unsupported, "document.coverage.modules.nodes.unsupported") };
+    })(),
+  };
   const countNodes = (entry: FlowNode): { supported: number; unsupported: number } => {
     const nested = entry.kind === "sequence" ? entry.children
       : entry.kind === "branch" ? [entry.then, ...(entry.else ? [entry.else] : [])]
@@ -393,6 +513,7 @@ export function validateFlowDocument(value: unknown): FlowDocument {
     return { supported: children.supported + 1, unsupported: children.unsupported };
   };
   const actualNodes = functions.map((fn) => countNodes(fn.body)).reduce((total, child) => ({ supported: total.supported + child.supported, unsupported: total.unsupported + child.unsupported }), { supported: 0, unsupported: 0 });
+  const actualModuleNodes = (modules ?? []).map((module) => countNodes(module.body)).reduce((total, child) => ({ supported: total.supported + child.supported, unsupported: total.unsupported + child.unsupported }), { supported: 0, unsupported: 0 });
   if (fileCoverage.scanned !== fileCoverage.analyzed + fileCoverage.skipped || fileCoverage.analyzed !== files.length) {
     throw new FlowValidationError("document.coverage.files is inconsistent");
   }
@@ -402,7 +523,10 @@ export function validateFlowDocument(value: unknown): FlowDocument {
   if (nodeCoverage.supported !== actualNodes.supported || nodeCoverage.unsupported !== actualNodes.unsupported) {
     throw new FlowValidationError("document.coverage.nodes is inconsistent");
   }
-  if (status === "complete" && (nodeCoverage.unsupported > 0 || diagnostics.length > 0)) {
+  if ((modules === undefined) !== (moduleCoverage === undefined) || moduleCoverage && (moduleCoverage.analyzed !== modules?.length || moduleCoverage.nodes.supported !== actualModuleNodes.supported || moduleCoverage.nodes.unsupported !== actualModuleNodes.unsupported)) {
+    throw new FlowValidationError("document.coverage.modules is inconsistent");
+  }
+  if (status === "complete" && (nodeCoverage.unsupported > 0 || (moduleCoverage?.nodes.unsupported ?? 0) > 0 || diagnostics.length > 0)) {
     throw new FlowValidationError("complete coverage cannot contain unsupported nodes or diagnostics");
   }
   return {
@@ -411,6 +535,8 @@ export function validateFlowDocument(value: unknown): FlowDocument {
     project: { name: string(project.name, "document.project.name"), tsconfig: string(project.tsconfig, "document.project.tsconfig") },
     files,
     functions,
+    modules,
+    entrypoints,
     roots,
     diagnostics,
     coverage: {
@@ -418,6 +544,7 @@ export function validateFlowDocument(value: unknown): FlowDocument {
       files: fileCoverage,
       functions: functionCoverage,
       nodes: nodeCoverage,
+      modules: moduleCoverage,
     },
   };
 }
