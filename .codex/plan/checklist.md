@@ -24,12 +24,12 @@ created: 2026-09-20
 
 ## M1 기반과 JSON 계약 — M1.1~M1.3
 
-- [ ] Node/pnpm/TypeScript 호환 버전 고정 및 lockfile 생성
-- [ ] 단일 패키지 CLI/model/analyzer/ui 구조와 test/typecheck/build 명령 구성
-- [ ] version/source span/coverage/diagnostics/노드 계약과 공용 검증기 구현
-- [ ] 수동 sample JSON 및 유효/무효 계약 테스트
-- [ ] standalone HTML 파일 선택 후 블록 1개 렌더링
-- [ ] file:// 로딩, 버전/참조 오류 처리 확인
+- [x] Node/pnpm/TypeScript 호환 버전 고정 및 lockfile 생성
+- [x] 단일 패키지 CLI/model/analyzer/ui 구조와 test/typecheck/build 명령 구성
+- [x] version/source span/coverage/diagnostics/노드 계약과 공용 검증기 구현
+- [x] 수동 sample JSON 및 유효/무효 계약 테스트
+- [x] standalone HTML 파일 선택 후 블록 1개 렌더링
+- [x] file:// 로딩, 버전/참조 오류 처리 확인
 
 ## M2 순차 분석 수직 흐름 — M2.1~M2.3
 

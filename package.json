@@ -1,0 +1,32 @@
+{
+  "name": "ts-covi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.4.0",
+  "engines": {
+    "node": ">=22.16"
+  },
+  "bin": {
+    "ts-covi": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "analyze": "tsx src/cli/index.ts",
+    "build": "pnpm run build:node && tsx scripts/build-viewer.ts",
+    "build:node": "tsc -p tsconfig.node.json",
+    "test": "tsx --test src/**/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "typescript": "7.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "esbuild": "^0.27.0",
+    "tsx": "^4.21.0"
+  }
+}
