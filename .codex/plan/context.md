@@ -79,6 +79,14 @@ Wecovi의 plugin-only 문서 방향과 별개로 이번 사용자 요청은 독�
 
 산출물: [overview](architecture.html), [TaskList](plan.md#실행-tasklist), [실행 상태](checklist.md), [후속 회귀 확장](test-code-plan.md).
 
+## 2026-09-20 구현 결과
+
+- TypeScript 7.0.2는 패키지 루트에서 기존 Compiler API를 제공하지 않아 실제 검증 후 6.0.3으로 고정했다.
+- 단일 패키지에 `src/model`, `src/analyzer`, `src/cli`, `src/ui`를 구현했다. DB·서버·workspace·schema framework는 추가하지 않았다.
+- 독립 주문 fixture는 complete이며, ts-covi 자체 분석은 지원 경계 11개와 진단 46개가 있는 partial이다.
+- 고정 commit `da62b8f`, Darwin 25.2.0 arm64, Node 22.16.0, pnpm 11.4.0, 7 files/1,331 LOC에서 분석 3회 중앙값 1.99s, peak RSS 중앙값 409,534,464 bytes, JSON 1,361,369 bytes였다. viewer 로딩 중앙값은 60.8ms였다.
+- `file://` E2E에서 함수 탐색, 구조 블록, 내부 함수 펼침, 재귀 경계, 주석/인자/원문, partial·version 오류, 악성 HTML 텍스트 렌더링을 확인했다.
+
 
 ### Wecovi 읽기 전용 재확인
 

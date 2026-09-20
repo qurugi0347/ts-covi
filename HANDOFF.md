@@ -1,19 +1,20 @@
 # 프로젝트: ts-covi
 
-## 목표
-`/Users/overdune/dev/covi/ts-covi`에서 TS/TSX를 정적 분석해 JSON으로 저장하고, standalone HTML에서 함수의 순서·분기·반복을 Scratch 형태로 읽는다. 호출별 주석·인자 표시와 내부 함수 펼치기를 지원한다.
+## 현재 상태
 
-## 완료된 작업
-- main 저장소 초기화, README와 `.codex/plan/{plan,context,checklist}.md` 작성·문서 검증 완료.
-- M0 완료. 계획은 draft이며 제품 코드·의존성·커밋·원격 연결은 없다.
+M1~M6 구현이 `codex/implement-ts-covi`에 완료됐다. TypeScript Compiler API 6.0.3 기반 CLI가 TS/TSX를 JSON으로 저장하고, `dist/viewer.html`에서 함수 검색·중첩 블록·내부 호출 펼침·재귀 경계·인자·주석·원문을 탐색한다.
 
-## 실패한 시도와 현재 문제
-실패나 blocker는 없다. 분석기 실행·빌드·성능 검증은 아직 하지 않았다.
+## 검증
 
-## 다음 단계
-1. Git 상태와 적용 지침, README, 계획 3종을 읽는다.
-2. 구현을 이어갈 경우 M1의 버전·JSON 계약·최소 HTML부터 단계별 완료 기준으로 진행한다.
-3. `/Users/overdune/dev/wecovi-plugin`은 읽기 전용 참고다. 기존 변경을 보존한다.
+- `pnpm test`: 9개 통과
+- `pnpm typecheck`: 통과
+- `pnpm build`: standalone viewer 생성
+- 주문 fixture: complete JSON과 file:// 탐색 통과
+- 자체 프로젝트 분석: partial JSON 생성 및 주요 함수 원문 대조 통과
+- 320px viewport, 키보드 focus, aria, 악성 HTML 문자열, invalid version 확인
+
+성능과 상세 환경은 README에 기록했다. 추가 회귀 테스트 확장은 `.codex/plan/test-code-plan.md`에 보류돼 있다.
 
 ## 핵심 경계
-Compiler API·JSON·React는 설계 제안이다. 실제 실행 값/순서를 추측하지 않고 미해결·미지원은 표시한다. 주석과 코드 인자를 분리하며 DB·AI·IDE 통합은 후속 범위다.
+
+실제 실행 값·분기·반복 횟수·비동기 완료 순서는 추측하지 않는다. project references, generator 의미, callback 실행 시점, 런타임 DI와 동적 구현은 partial 진단 또는 명시적 경계로 남긴다. DB·AI·IDE 통합은 후속 범위다.

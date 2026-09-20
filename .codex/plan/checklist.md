@@ -70,8 +70,8 @@ created: 2026-09-20
 
 - [x] Wecovi 주문 흐름을 참고한 독립 fixture 검증
 - [x] 실제 TS/NestJS 프로젝트의 주요 함수와 결과 수동 대조
-- [ ] 고정 환경 cold 3회 분석/로딩 시간, peak RSS, JSON 크기 기록
-- [ ] 실제 결과에 따른 지원 구문·미지원 경계·사용법 문서 작성
+- [x] 고정 환경 cold 3회 분석/로딩 시간, peak RSS, JSON 크기 기록
+- [x] 실제 결과에 따른 지원 구문·미지원 경계·사용법 문서 작성
 - [ ] clean install → test → typecheck → build → CLI → file:// 뷰어 검증
 - [ ] plan의 최종 완료 조건 확인 및 남은 위험 보고
 
