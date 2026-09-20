@@ -17,7 +17,7 @@ pnpm build
 
 ## 사용법
 
-프로젝트의 `tsconfig.json`을 분석한다. 기본 출력은 `.covi/flow.json`이다.
+프로젝트의 `tsconfig.json`을 분석한다. 기본 출력은 프로젝트 루트의 `.covi/flow.json`이다. 상대 `--out` 경로도 현재 작업 디렉터리가 아니라 `tsconfig.json`이 있는 프로젝트 루트를 기준으로 해석한다.
 
 ```bash
 pnpm analyze --project ./tsconfig.json --out ./.covi/flow.json

@@ -6,7 +6,7 @@ M1~M6 구현이 `codex/implement-ts-covi`에 완료됐다. TypeScript Compiler A
 
 ## 검증
 
-- `pnpm test`: 13개 통과
+- `pnpm test`: 14개 통과
 - `pnpm typecheck`: 통과
 - `pnpm build`: standalone viewer 생성
 - clean archive 설치부터 주문 CLI 분석까지 통과

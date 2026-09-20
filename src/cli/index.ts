@@ -12,6 +12,9 @@ const option = (args: string[], name: string): string | undefined => {
   return index >= 0 ? args[index + 1] : undefined;
 };
 
+export const resolveOutputPath = (project: string, out = ".covi/flow.json"): string =>
+  path.resolve(path.dirname(path.resolve(project)), out);
+
 export async function run(args: string[]): Promise<number> {
   if (args[0] !== "analyze") {
     console.error(usage);
@@ -23,14 +26,15 @@ export async function run(args: string[]): Promise<number> {
     console.error(usage);
     return 1;
   }
-  const outputPath = path.resolve(out);
+  const projectPath = path.resolve(project);
+  const outputPath = resolveOutputPath(projectPath, out);
   try {
     try {
       if ((await lstat(outputPath)).isSymbolicLink()) throw new Error("Refusing to replace a symbolic-link output file.");
     } catch (cause) {
       if (!(cause && typeof cause === "object" && "code" in cause && cause.code === "ENOENT")) throw cause;
     }
-    const document = analyzeProject(project, [outputPath]);
+    const document = analyzeProject(projectPath, [outputPath]);
     validateFlowDocument(document);
     await mkdir(path.dirname(outputPath), { recursive: true });
     const temporaryPath = path.join(path.dirname(outputPath), `.${path.basename(outputPath)}.${randomUUID()}.tmp`);
