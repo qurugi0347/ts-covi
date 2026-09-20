@@ -16,6 +16,7 @@ import {
   type SourceSpan,
 } from "../model/flow.js";
 import { discoverScripts } from "./scripts.js";
+import { detectEntryPoints } from "./entrypoints.js";
 
 const PRODUCER_VERSION = "0.1.0";
 
@@ -522,11 +523,34 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     if (!include) skipped += 1;
     return include;
   });
-  const files = sourceFiles.map((sourceFile) => {
+  const vueFiles = new Map<string, { path: string; source: string }>();
+  for (const sourceFile of sourceFiles) {
+    const visit = (node: ts.Node): void => {
+      const specifier = ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) ? node.moduleSpecifier.text
+        : ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0] && ts.isStringLiteral(node.arguments[0]) ? node.arguments[0].text
+        : undefined;
+      if (specifier?.endsWith(".vue")) {
+        try {
+          const absolute = realpathSync(path.resolve(path.dirname(sourceFile.fileName), specifier));
+          const relative = posix(path.relative(projectRoot, absolute));
+          if (isWithin(projectRoot, absolute) && !ignoreMatcher.ignores(relative) && !excluded.includes(absolute)) vueFiles.set(absolute, { path: relative, source: readFileSync(absolute, "utf8") });
+        } catch {
+          // The route detector records unresolved Vue sources on the route declaration.
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+  }
+  const files = [...sourceFiles.map((sourceFile) => {
     const relativePath = posix(path.relative(projectRoot, realpathSync(sourceFile.fileName)));
     return { id: `file:${relativePath}`, path: relativePath, contentHash: createHash("sha256").update(sourceFile.text).digest("hex"), source: sourceFile.text };
-  });
+  }), ...[...vueFiles.values()].map((file) => ({ id: `file:${file.path}`, path: file.path, contentHash: createHash("sha256").update(file.source).digest("hex"), source: file.source }))];
   const fileIds = new Map(files.map((file) => [file.path, file.id]));
+  const vueSources = new Map([...vueFiles].map(([absolute, file]) => {
+    const lines = file.source.split(/\r?\n/);
+    return [absolute, { fileId: fileIds.get(file.path)!, start: 0, end: file.source.length, startLine: 1, startColumn: 1, endLine: lines.length, endColumn: (lines.at(-1)?.length ?? 0) + 1 } satisfies SourceSpan] as const;
+  }));
   for (const diagnostic of [...program.getOptionsDiagnostics(), ...program.getGlobalDiagnostics(), ...program.getSyntacticDiagnostics(), ...program.getSemanticDiagnostics()]) {
     const base = {
       severity: diagnostic.category === ts.DiagnosticCategory.Warning ? "warning" as const : "error" as const,
@@ -607,6 +631,7 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
       reasons: [],
     };
   });
+  entrypoints.push(...detectEntryPoints({ sourceFiles, checker, functionIds, fileIds, projectRoot, span: sourceSpan, vueSources, diagnostics }));
   const scriptSourceFiles = new Map(sourceFiles.map((sourceFile) => [realpathSync(sourceFile.fileName), sourceFile]));
   const modules: FlowModule[] = [];
   let moduleSupported = 0;
@@ -666,7 +691,7 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     diagnostics,
     coverage: {
       status: unsupportedCount || unresolved ? "partial" : "complete",
-      files: { scanned: sourceFiles.length + skipped, analyzed: sourceFiles.length, skipped },
+      files: { scanned: files.length + skipped, analyzed: files.length, skipped },
       functions: { discovered: indexed.length, analyzed: functions.length },
       nodes: { supported, unsupported: unsupportedCount },
       modules: { analyzed: modules.length, nodes: { supported: moduleSupported, unsupported: moduleUnsupported } },

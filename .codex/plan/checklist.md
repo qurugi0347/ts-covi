@@ -32,17 +32,17 @@ status: draft
 
 ## Phase 3 — API
 
-- [ ] E3 NestJS decorator/import 탐지
-- [ ] E3 검증: 경로 배열·alias·global prefix 미확정·동명 API 오탐
-- [ ] E4 Express mount·등록 handler 탐지
-- [ ] E4 검증: 복수/순환 mount·미들웨어·동적 경로 partial
+- [x] E3 NestJS decorator/import 탐지
+- [x] E3 검증: 경로 배열·alias·global prefix 미확정·동명 API 오탐
+- [x] E4 Express mount·등록 handler 탐지
+- [x] E4 검증: 복수/순환 mount·미들웨어·동적 경로 partial
 
 ## Phase 4 — 페이지
 
-- [ ] E5 React Router 객체/JSX·nested/index/pathless·대상 연결
-- [ ] E5 검증: Component/element·loader/action·lazy 미해결
-- [ ] E6 Vue Router 및 .vue 원문 위치 연결
-- [ ] E6 검증: nested·import·원문 위치·ignore/외부 경로·SFC partial
+- [x] E5 React Router 객체/JSX·nested/index/pathless·대상 연결
+- [x] E5 검증: Component/element·loader/action·lazy 미해결
+- [x] E6 Vue Router 및 .vue 원문 위치 연결
+- [x] E6 검증: nested·import·원문 위치·ignore/외부 경로·SFC partial
 
 ## Phase 5 — 통합과 인수
 
