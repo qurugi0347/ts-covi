@@ -30,3 +30,9 @@ function one() { return 1; }
 function two() { return 2; }
 function send(_left: number, _right: number) {}
 function sendAll(..._items: number[]) {}
+
+/**
+ * 화살표 함수 설명
+ * @covi 화살표 흐름
+ */
+export const arrowFlow = () => one();

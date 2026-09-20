@@ -2,12 +2,12 @@
 name: ts-covi-plan
 description: TypeScript 정적 분석 CLI와 JSON 기반 Scratch 형태 HTML 뷰어의 단계별 구현 계획
 created: 2026-09-20
-status: draft
+status: complete
 ---
 
 # ts-covi 개발 계획
 
-먼저 [Architecture overview](architecture.html)를 읽고, 실행 상태는 [체크리스트](checklist.md)에서 확인한다. 이 문서는 구현 전 draft이며, 이번 요청은 계획 보강까지다.
+먼저 [Architecture overview](architecture.html)를 읽고, 실행 상태는 [체크리스트](checklist.md)에서 확인한다. M1~M6 구현과 필수 검증을 완료했다.
 
 ## 최종 목표
 

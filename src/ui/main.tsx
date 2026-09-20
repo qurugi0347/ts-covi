@@ -31,6 +31,13 @@ const nodeSummary = (node: FlowNode, document: FlowDocument): string => {
   return node.kind;
 };
 
+const branchLabels = (when: import("../model/flow.js").BranchNode["when"]): [string, string] => {
+  if (when === "falsy") return ["falsy일 때", "그 외"];
+  if (when === "nullish") return ["nullish일 때", "그 외"];
+  if (when === "non-nullish") return ["값이 있을 때", "값이 없을 때"];
+  return ["truthy일 때", "그 외"];
+};
+
 type NodeListProps = {
   sequence: SequenceNode;
   document: FlowDocument;
@@ -58,6 +65,7 @@ function FlowBlock({ node, document, ancestors, expanded, selectedNodeId, onTogg
   const isExpanded = node.kind === "call" && expanded.has(node.id);
   const regionId = `expanded-${node.id.replace(/[^A-Za-z0-9_-]/g, "-")}`;
   const childProps = { document, ancestors, expanded, selectedNodeId, onToggle, onSelect };
+  const labels = node.kind === "branch" ? branchLabels(node.when) : undefined;
 
   return <article className={`flow-block block-${node.kind}${selectedNodeId === node.id ? " selected" : ""}`}>
     <header className="block-header">
@@ -73,12 +81,17 @@ function FlowBlock({ node, document, ancestors, expanded, selectedNodeId, onTogg
     {node.kind === "statement" && <code className="code-line">{node.code}</code>}
     {node.kind === "unsupported" && <code className="code-line">{node.code}</code>}
 
-    {node.kind === "branch" && <div className="nested-grid"><section><h4>참</h4><NodeList sequence={node.then} {...childProps} label="참 분기" /></section>{node.else && <section><h4>거짓</h4><NodeList sequence={node.else} {...childProps} label="거짓 분기" /></section>}</div>}
+    {node.kind === "branch" && <div className="nested-grid"><section><h4>{labels![0]}</h4><NodeList sequence={node.then} {...childProps} label={labels![0]} /></section>{node.else && <section><h4>{labels![1]}</h4><NodeList sequence={node.else} {...childProps} label={labels![1]} /></section>}</div>}
     {node.kind === "loop" && <div className="nested-grid loop-parts">
-      {node.initializer && <section><h4>초기화</h4><code>{node.initializer}</code>{node.initializerFlow && <NodeList sequence={node.initializerFlow} {...childProps} />}</section>}
-      {node.condition && <section><h4>조건</h4><code>{node.condition}</code>{node.conditionFlow && <NodeList sequence={node.conditionFlow} {...childProps} />}</section>}
-      <section><h4>본문</h4><NodeList sequence={node.body} {...childProps} /></section>
-      {node.incrementor && <section><h4>갱신</h4><code>{node.incrementor}</code>{node.incrementorFlow && <NodeList sequence={node.incrementorFlow} {...childProps} />}</section>}
+      {node.loopKind === "do" ? <>
+        <section><h4>본문</h4><NodeList sequence={node.body} {...childProps} /></section>
+        {node.condition && <section><h4>조건</h4><code>{node.condition}</code>{node.conditionFlow && <NodeList sequence={node.conditionFlow} {...childProps} />}</section>}
+      </> : <>
+        {node.initializer && <section><h4>초기화</h4><code>{node.initializer}</code>{node.initializerFlow && <NodeList sequence={node.initializerFlow} {...childProps} />}</section>}
+        {node.condition && <section><h4>조건</h4><code>{node.condition}</code>{node.conditionFlow && <NodeList sequence={node.conditionFlow} {...childProps} />}</section>}
+        <section><h4>본문</h4><NodeList sequence={node.body} {...childProps} /></section>
+        {node.incrementor && <section><h4>갱신</h4><code>{node.incrementor}</code>{node.incrementorFlow && <NodeList sequence={node.incrementorFlow} {...childProps} />}</section>}
+      </>}
     </div>}
     {node.kind === "try" && <div className="nested-grid"><section><h4>try</h4><NodeList sequence={node.body} {...childProps} /></section>{node.catch && <section><h4>catch {node.catch.variable}</h4><NodeList sequence={node.catch.body} {...childProps} /></section>}{node.finally && <section><h4>finally</h4><NodeList sequence={node.finally} {...childProps} /></section>}</div>}
     {target && isExpanded && !recursive && <section className="expanded-function" id={regionId}><h4>{target.name}</h4><NodeList sequence={target.body} {...childProps} ancestors={[...ancestors, target.id]} /></section>}
@@ -117,7 +130,7 @@ function App() {
 
   const drop = (event: DragEvent<HTMLElement>) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) void load(file); };
   const selectedFunction = flow?.functions.find((entry) => entry.id === selectedFunctionId);
-  const selectedNode = selectedFunction && selectedNodeId ? findNode(selectedFunction.body, selectedNodeId) : undefined;
+  const selectedNode = flow && selectedNodeId ? flow.functions.map((entry) => findNode(entry.body, selectedNodeId)).find(Boolean) : undefined;
   const functions = flow?.functions.filter((entry) => `${entry.name} ${entry.signature} ${entry.description ?? ""}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())) ?? [];
   const toggle = (id: string) => setExpanded((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
 

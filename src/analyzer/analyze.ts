@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
+import createIgnore from "ignore";
 import ts from "typescript";
 import {
   FORMAT_VERSION,
@@ -44,22 +45,26 @@ const isWithin = (root: string, target: string): boolean => {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 };
 
-const readIgnorePatterns = (root: string): string[] => {
+const readIgnorePatterns = (root: string): string => {
   try {
-    return readFileSync(path.join(root, ".gitignore"), "utf8")
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("!") && !line.startsWith("#"));
+    return readFileSync(path.join(root, ".gitignore"), "utf8");
   } catch {
-    return [];
+    return "";
   }
 };
 
-const ignored = (relativePath: string, patterns: string[]): boolean => patterns.some((raw) => {
-  const pattern = raw.replace(/^\//, "").replace(/\/$/, "");
-  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replaceAll("**", ".*").replaceAll("*", "[^/]*");
-  return new RegExp(`(?:^|/)${escaped}(?:/|$)`).test(relativePath);
-});
+const optionalChainBase = (expression: ts.Expression): { base?: ts.Expression; boundaries: number } => {
+  if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression) || ts.isNonNullExpression(expression)) {
+    return optionalChainBase(expression.expression);
+  }
+  if (ts.isCallExpression(expression) || ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
+    const nested = optionalChainBase(expression.expression);
+    return expression.questionDotToken
+      ? { base: nested.base ?? expression.expression, boundaries: nested.boundaries + 1 }
+      : nested;
+  }
+  return { boundaries: 0 };
+};
 
 const sourceSpan = (sourceFile: ts.SourceFile, fileId: string, node: ts.Node): SourceSpan => {
   const start = node.getStart(sourceFile);
@@ -81,7 +86,7 @@ const supportedFunction = (node: ts.Node): node is ts.FunctionLikeDeclaration =>
   ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node);
 
 const functionName = (node: ts.FunctionLikeDeclaration): string => {
-  if (node.name && ts.isIdentifier(node.name)) return node.name.text;
+  if (node.name) return node.name.getText(node.getSourceFile());
   const parent = node.parent;
   if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) return parent.name.text;
   if (ts.isPropertyAssignment(parent)) return parent.name.getText();
@@ -91,7 +96,13 @@ const functionName = (node: ts.FunctionLikeDeclaration): string => {
 const functionBody = (node: ts.FunctionLikeDeclaration): ts.ConciseBody | undefined => node.body;
 
 const functionMetadata = (sourceFile: ts.SourceFile, node: ts.FunctionLikeDeclaration): { description?: string; groupPath?: string[]; root: boolean } => {
-  const trivia = sourceFile.text.slice(node.getFullStart(), node.getStart(sourceFile));
+  let owner: ts.Node = node;
+  if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && ts.isVariableDeclaration(node.parent)) {
+    owner = node.parent.parent.parent;
+  } else if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && ts.isPropertyAssignment(node.parent)) {
+    owner = node.parent;
+  }
+  const trivia = sourceFile.text.slice(owner.getFullStart(), owner.getStart(sourceFile));
   const match = trivia.match(/\/\*\*([\s\S]*?)\*\/\s*$/);
   if (!match) return { root: false };
   const lines = match[1]!.split(/\r?\n/).map((line) => line.replace(/^\s*\*?\s?/, "").trim());
@@ -244,24 +255,33 @@ const applyCallAnnotation = (context: AnalyzeContext, statement: ts.Statement, n
 };
 
 const expressionNodes = (context: AnalyzeContext, expression: ts.Expression, awaited = false): FlowNode[] => {
+  const afterBase = (current: ts.Expression, base: ts.Expression): FlowNode[] => {
+    if (current === base) return [];
+    if (ts.isParenthesizedExpression(current) || ts.isAsExpression(current) || ts.isTypeAssertionExpression(current) || ts.isNonNullExpression(current)) return afterBase(current.expression, base);
+    if (ts.isPropertyAccessExpression(current)) return afterBase(current.expression, base);
+    if (ts.isElementAccessExpression(current)) return [...afterBase(current.expression, base), ...expressionNodes(context, current.argumentExpression)];
+    if (ts.isCallExpression(current)) {
+      const args = current.arguments.flatMap((argument) => ts.isArrowFunction(argument) || ts.isFunctionExpression(argument) ? [] : expressionNodes(context, argument));
+      return [...afterBase(current.expression, base), ...args, createCallNode(context, current, false)];
+    }
+    return expressionNodes(context, current);
+  };
   if (ts.isAwaitExpression(expression)) return expressionNodes(context, expression.expression, true);
   if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression) || ts.isNonNullExpression(expression)) {
     return expressionNodes(context, expression.expression, awaited);
   }
   if (ts.isCallExpression(expression)) {
-    const access = ts.isPropertyAccessExpression(expression.expression) || ts.isElementAccessExpression(expression.expression) ? expression.expression : undefined;
-    if (expression.questionDotToken || access?.questionDotToken) {
-      const before = access ? expressionNodes(context, access.expression) : [];
-      const conditional = expression.arguments.flatMap((argument) => ts.isArrowFunction(argument) || ts.isFunctionExpression(argument) ? [] : expressionNodes(context, argument));
+    const optional = optionalChainBase(expression);
+    if (optional.base) {
+      const before = expressionNodes(context, optional.base);
+      if (optional.boundaries > 1) return [...before, unsupported(context, expression, "Multiple optional chain boundaries are preserved as an opaque expression.")];
+      const conditional = [...afterBase(expression.expression, optional.base), ...expression.arguments.flatMap((argument) => ts.isArrowFunction(argument) || ts.isFunctionExpression(argument) ? [] : expressionNodes(context, argument))];
       conditional.push(createCallNode(context, expression, awaited));
       const then = sequence(context, expression, conditional);
       context.supported += 1;
-      return [...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: `${access?.expression.getText(context.sourceFile) ?? expression.expression.getText(context.sourceFile)} != null`, then }];
+      return [...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: optional.base.getText(context.sourceFile), when: "non-nullish", then }];
     }
-    const children: FlowNode[] = [];
-    if (ts.isPropertyAccessExpression(expression.expression) || ts.isElementAccessExpression(expression.expression)) {
-      children.push(...expressionNodes(context, expression.expression.expression));
-    }
+    const children = expressionNodes(context, expression.expression);
     for (const argument of expression.arguments) {
       if (!ts.isArrowFunction(argument) && !ts.isFunctionExpression(argument)) children.push(...expressionNodes(context, argument));
     }
@@ -269,7 +289,7 @@ const expressionNodes = (context: AnalyzeContext, expression: ts.Expression, awa
     return children;
   }
   if (ts.isNewExpression(expression)) {
-    const children = expression.arguments?.flatMap((argument) => expressionNodes(context, argument)) ?? [];
+    const children = [...expressionNodes(context, expression.expression), ...(expression.arguments?.flatMap((argument) => expressionNodes(context, argument)) ?? [])];
     const call: CallNode = {
       id: context.nextNodeId(),
       kind: "call",
@@ -288,8 +308,11 @@ const expressionNodes = (context: AnalyzeContext, expression: ts.Expression, awa
     if ([ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(expression.operatorToken.kind)) {
       const before = expressionNodes(context, expression.left);
       const then = sequence(context, expression.right, expressionNodes(context, expression.right));
+      const when = expression.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ? "truthy"
+        : expression.operatorToken.kind === ts.SyntaxKind.BarBarToken ? "falsy"
+        : "nullish";
       context.supported += 1;
-      return [...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: expression.left.getText(context.sourceFile), then }];
+      return [...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: expression.left.getText(context.sourceFile), when, then }];
     }
     return [...expressionNodes(context, expression.left), ...expressionNodes(context, expression.right)];
   }
@@ -298,23 +321,48 @@ const expressionNodes = (context: AnalyzeContext, expression: ts.Expression, awa
     const then = sequence(context, expression.whenTrue, expressionNodes(context, expression.whenTrue));
     const otherwise = sequence(context, expression.whenFalse, expressionNodes(context, expression.whenFalse));
     context.supported += 1;
-    return [...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: expression.condition.getText(context.sourceFile), then, else: otherwise }];
+    return [...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: expression.condition.getText(context.sourceFile), when: "truthy", then, else: otherwise }];
   }
-  if (ts.isPrefixUnaryExpression(expression) || ts.isPostfixUnaryExpression(expression)) return [];
-  if (ts.isPropertyAccessExpression(expression)) return expressionNodes(context, expression.expression);
-  if (ts.isElementAccessExpression(expression)) return [...expressionNodes(context, expression.expression), ...expressionNodes(context, expression.argumentExpression)];
+  if (ts.isPrefixUnaryExpression(expression) || ts.isPostfixUnaryExpression(expression)) return expressionNodes(context, expression.operand);
+  if (ts.isTypeOfExpression(expression) || ts.isVoidExpression(expression) || ts.isDeleteExpression(expression)) return expressionNodes(context, expression.expression);
+  if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
+    const optional = optionalChainBase(expression);
+    if (optional.base) {
+      const before = expressionNodes(context, optional.base);
+      if (optional.boundaries > 1) return [...before, unsupported(context, expression, "Multiple optional chain boundaries are preserved as an opaque expression.")];
+      const then = sequence(context, expression, afterBase(expression, optional.base));
+      context.supported += 1;
+      return [...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: optional.base.getText(context.sourceFile), when: "non-nullish", then }];
+    }
+    if (ts.isPropertyAccessExpression(expression)) return expressionNodes(context, expression.expression);
+    return [...expressionNodes(context, expression.expression), ...expressionNodes(context, expression.argumentExpression)];
+  }
   if (ts.isArrayLiteralExpression(expression)) return expression.elements.flatMap((element) => ts.isExpression(element) ? expressionNodes(context, element) : []);
   if (ts.isObjectLiteralExpression(expression)) return expression.properties.flatMap((property) => {
-    if (ts.isPropertyAssignment(property)) return expressionNodes(context, property.initializer);
+    const name = property.name && ts.isComputedPropertyName(property.name) ? expressionNodes(context, property.name.expression) : [];
+    if (ts.isPropertyAssignment(property)) return [...name, ...expressionNodes(context, property.initializer)];
+    if (ts.isShorthandPropertyAssignment(property) && property.objectAssignmentInitializer) return [...name, ...expressionNodes(context, property.objectAssignmentInitializer)];
     if (ts.isSpreadAssignment(property)) return expressionNodes(context, property.expression);
-    return [];
+    return name;
   });
   if (ts.isTemplateExpression(expression)) return expression.templateSpans.flatMap((part) => expressionNodes(context, part.expression));
+  if (ts.isTaggedTemplateExpression(expression)) {
+    const nested = ts.isTemplateExpression(expression.template) ? expression.template.templateSpans.flatMap((part) => expressionNodes(context, part.expression)) : [];
+    return [...expressionNodes(context, expression.tag), ...nested, unsupported(context, expression, "Tagged template invocation is not resolved as a call.")];
+  }
   if (ts.isYieldExpression(expression)) return [unsupported(context, expression, "Generator yield execution is not supported.")];
   if (ts.isJsxElement(expression) || ts.isJsxSelfClosingElement(expression) || ts.isJsxFragment(expression)) {
     return [unsupported(context, expression, "JSX is preserved as an opaque expression.")];
   }
-  return [];
+  if (ts.isIdentifier(expression) || ts.isFunctionExpression(expression) || ts.isArrowFunction(expression)
+    || ts.isStringLiteralLike(expression) || ts.isNumericLiteral(expression) || ts.isBigIntLiteral(expression)
+    || ts.isRegularExpressionLiteral(expression) || ts.isMetaProperty(expression)
+    || [ts.SyntaxKind.ThisKeyword, ts.SyntaxKind.SuperKeyword, ts.SyntaxKind.NullKeyword, ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword].includes(expression.kind)) return [];
+  const nested: FlowNode[] = [];
+  ts.forEachChild(expression, (child) => {
+    if (ts.isExpression(child) && !ts.isFunctionExpression(child) && !ts.isArrowFunction(child)) nested.push(...expressionNodes(context, child));
+  });
+  return [...nested, unsupported(context, expression, `${ts.SyntaxKind[expression.kind]} expression is not supported.`)];
 };
 
 const analyzeStatements = (context: AnalyzeContext, owner: ts.Node, statements: readonly ts.Statement[]): { sequence: SequenceNode; terminates: boolean } => {
@@ -404,7 +452,7 @@ const statementNodes = (context: AnalyzeContext, statement: ts.Statement, label?
     const then = asBlock(context, statement.thenStatement);
     const otherwise = statement.elseStatement ? asBlock(context, statement.elseStatement) : undefined;
     context.supported += 1;
-    return finish([...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, statement), condition: statement.expression.getText(context.sourceFile), then: then.sequence, else: otherwise?.sequence }], then.terminates && Boolean(otherwise?.terminates));
+    return finish([...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, statement), condition: statement.expression.getText(context.sourceFile), when: "truthy", then: then.sequence, else: otherwise?.sequence }], then.terminates && Boolean(otherwise?.terminates));
   }
   if (ts.isIterationStatement(statement, false)) return finish([loopParts(context, statement, label)], false);
   if (ts.isBreakStatement(statement) || ts.isContinueStatement(statement)) {
@@ -458,7 +506,7 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
   const checker = program.getTypeChecker();
   const diagnostics: FlowDocument["diagnostics"] = [];
   if (parsed.projectReferences?.length) diagnostics.push({ severity: "warning", code: "PROJECT_REFERENCES_UNSUPPORTED", message: "Project references are not analyzed as separate projects." });
-  const ignorePatterns = readIgnorePatterns(projectRoot);
+  const ignoreMatcher = createIgnore().add(readIgnorePatterns(projectRoot));
   const excluded = excludedPaths.map((entry) => path.resolve(entry));
   let skipped = 0;
   const sourceFiles = program.getSourceFiles().filter((sourceFile) => {
@@ -466,7 +514,7 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     let real: string;
     try { real = realpathSync(sourceFile.fileName); } catch { skipped += 1; return false; }
     const relative = posix(path.relative(projectRoot, real));
-    const include = isWithin(projectRoot, real) && !relative.startsWith("node_modules/") && !ignored(relative, ignorePatterns) && !excluded.includes(real);
+    const include = isWithin(projectRoot, real) && !relative.startsWith("node_modules/") && !ignoreMatcher.ignores(relative) && !excluded.includes(real);
     if (!include) skipped += 1;
     return include;
   });
@@ -475,6 +523,29 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     return { id: `file:${relativePath}`, path: relativePath, contentHash: createHash("sha256").update(sourceFile.text).digest("hex"), source: sourceFile.text };
   });
   const fileIds = new Map(files.map((file) => [file.path, file.id]));
+  for (const diagnostic of [...program.getOptionsDiagnostics(), ...program.getGlobalDiagnostics(), ...program.getSyntacticDiagnostics(), ...program.getSemanticDiagnostics()]) {
+    const base = {
+      severity: diagnostic.category === ts.DiagnosticCategory.Warning ? "warning" as const : "error" as const,
+      code: `TS${diagnostic.code}`,
+      message: ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
+    };
+    if (!diagnostic.file || diagnostic.start === undefined) {
+      diagnostics.push(base);
+      continue;
+    }
+    let relativePath: string;
+    try { relativePath = posix(path.relative(projectRoot, realpathSync(diagnostic.file.fileName))); } catch { continue; }
+    const fileId = fileIds.get(relativePath);
+    if (!fileId) continue;
+    const start = diagnostic.start;
+    const end = start + (diagnostic.length ?? 0);
+    const startPosition = diagnostic.file.getLineAndCharacterOfPosition(start);
+    const endPosition = diagnostic.file.getLineAndCharacterOfPosition(end);
+    diagnostics.push({
+      ...base,
+      source: { fileId, start, end, startLine: startPosition.line + 1, startColumn: startPosition.character + 1, endLine: endPosition.line + 1, endColumn: endPosition.character + 1 },
+    });
+  }
   const indexed: IndexedFunction[] = [];
   for (const sourceFile of sourceFiles) {
     const relativePath = posix(path.relative(projectRoot, realpathSync(sourceFile.fileName)));

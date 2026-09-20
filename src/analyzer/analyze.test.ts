@@ -8,6 +8,7 @@ const fixture = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.
 const controlFixture = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../fixtures/control/tsconfig.json");
 const annotationFixture = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../fixtures/annotations/tsconfig.json");
 const orderFixture = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../fixtures/order/tsconfig.json");
+const syntaxErrorFixture = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../fixtures/syntax-error/tsconfig.json");
 
 const walk = (node: import("../model/flow.js").FlowNode): import("../model/flow.js").FlowNode[] => {
   const nested = node.kind === "sequence" ? node.children
@@ -44,12 +45,22 @@ test("preserves branches, loop positions, jump targets and finally completion", 
   assert.ok(loop?.kind === "loop" && loop.initializer?.includes("start()") && loop.condition?.includes("keepGoing") && loop.incrementor?.includes("next"));
   assert.ok(loop.kind === "loop" && loop.initializerFlow && loop.conditionFlow && loop.incrementorFlow);
   assert.ok(nodes.filter((entry) => entry.kind === "branch").length >= 4);
+  assert.ok(nodes.some((entry) => entry.kind === "branch" && entry.when === "falsy"));
+  assert.ok(nodes.some((entry) => entry.kind === "branch" && entry.when === "nullish"));
+  assert.ok(nodes.some((entry) => entry.kind === "branch" && entry.when === "non-nullish" && entry.condition === "callback"));
+  assert.ok(nodes.some((entry) => entry.kind === "call" && entry.calleeExpression === "hidden"));
+  assert.ok(nodes.some((entry) => entry.kind === "loop" && entry.loopKind === "do"));
   assert.ok(nodes.filter((entry) => entry.kind === "break" || entry.kind === "continue").every((entry) => "targetId" in entry && entry.targetId === loop.id));
   assert.ok(nodes.some((entry) => entry.kind === "try" && entry.catch && entry.finally));
   assert.equal(nodes.some((entry) => entry.kind === "call" && entry.calleeExpression === "unreachable"), false);
 
   const override = document.functions.find((entry) => entry.name === "override")!;
   assert.ok(walk(override.body).some((entry) => entry.kind === "try" && entry.finallyOverrides));
+  const optional = document.functions.find((entry) => entry.name === "optionalChains")!;
+  const optionalBranches = optional.body.children.filter((entry): entry is import("../model/flow.js").BranchNode => entry.kind === "branch");
+  assert.deepEqual(optionalBranches.map((entry) => entry.condition), ["services", "nested", "services"]);
+  assert.ok(walk(optionalBranches[0]!.then).some((entry) => entry.kind === "call" && entry.calleeExpression === "serviceKey"));
+  assert.ok(walk(optionalBranches[2]!.then).some((entry) => entry.kind === "call" && entry.calleeExpression === "serviceKey"));
   assert.ok(document.diagnostics.some((entry) => entry.code === "UNSUPPORTED_SYNTAX" && entry.message.includes("Generator")));
 });
 
@@ -59,6 +70,7 @@ test("keeps function and call annotations separate from code arguments", () => {
   assert.deepEqual(document.roots, [root.id]);
   assert.equal(root.description, "주문을 처리한다.");
   assert.deepEqual(root.groupPath, ["orders", "payment"]);
+  assert.equal(document.functions.find((entry) => entry.name === "arrowFlow")?.description, "화살표 함수 설명");
   const calls = walk(root.body).filter((entry): entry is import("../model/flow.js").CallNode => entry.kind === "call");
   const charge = calls.find((entry) => entry.annotation?.label === "결제 승인")!;
   assert.deepEqual(charge.args, [{ expression: "token", annotation: "결제 토큰" }, { expression: "amount", annotation: "최종 금액" }]);
@@ -68,6 +80,19 @@ test("keeps function and call annotations separate from code arguments", () => {
   assert.ok(document.diagnostics.some((entry) => entry.code === "INVALID_COVI_CALL"));
   assert.ok(document.diagnostics.some((entry) => entry.code === "ORPHAN_COVI_CALL"));
   assert.deepEqual(calls.map((entry) => entry.calleeExpression), ["charge", "one", "two", "send", "sendAll", "charge"]);
+});
+
+test("marks compiler errors as partial diagnostics", () => {
+  const document = analyzeProject(syntaxErrorFixture);
+  assert.equal(document.coverage.status, "partial");
+  assert.ok(document.diagnostics.some((entry) => entry.code === "TS1005"));
+  assert.ok(document.diagnostics.some((entry) => entry.code === "TS2322"));
+});
+
+test("applies ordered gitignore patterns including negation", () => {
+  const document = analyzeProject(fixture);
+  assert.ok(document.files.some((entry) => entry.path === "keep.ignored.ts"));
+  assert.equal(document.files.some((entry) => entry.path === "drop.ignored.ts"), false);
 });
 
 test("analyzes the independent order flow without inlining callbacks", () => {

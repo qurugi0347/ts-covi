@@ -39,6 +39,7 @@ export type CallNode = BaseNode & {
 export type BranchNode = BaseNode & {
   kind: "branch";
   condition: string;
+  when?: "truthy" | "falsy" | "nullish" | "non-nullish";
   then: SequenceNode;
   else?: SequenceNode;
 };
@@ -144,6 +145,11 @@ const number = (value: unknown, path: string): number => {
   return value as number;
 };
 
+const boolean = (value: unknown, path: string): boolean => {
+  if (typeof value !== "boolean") throw new FlowValidationError(`${path} must be a boolean`);
+  return value;
+};
+
 const array = (value: unknown, path: string): unknown[] => {
   if (!Array.isArray(value)) throw new FlowValidationError(`${path} must be an array`);
   return value;
@@ -175,6 +181,7 @@ function node(
   path: string,
   fileLengths: Map<string, number>,
   nodeIds: Set<string>,
+  activeLoopIds: string[],
   referencedFunctions: Set<string>,
 ): FlowNode {
   const candidate = object(value, path);
@@ -183,13 +190,13 @@ function node(
   nodeIds.add(id);
   const source = span(candidate.source, `${path}.source`, fileLengths);
   const kind = string(candidate.kind, `${path}.kind`);
-  const sequence = (entry: unknown, childPath: string): SequenceNode => {
-    const result = node(entry, childPath, fileLengths, nodeIds, referencedFunctions);
+  const sequence = (entry: unknown, childPath: string, loops = activeLoopIds): SequenceNode => {
+    const result = node(entry, childPath, fileLengths, nodeIds, loops, referencedFunctions);
     if (result.kind !== "sequence") throw new FlowValidationError(`${childPath} must be a sequence`);
     return result;
   };
   const children = (entry: unknown, childPath: string) =>
-    array(entry, childPath).map((child, index) => node(child, `${childPath}[${index}]`, fileLengths, nodeIds, referencedFunctions));
+    array(entry, childPath).map((child, index) => node(child, `${childPath}[${index}]`, fileLengths, nodeIds, activeLoopIds, referencedFunctions));
 
   switch (kind) {
     case "sequence":
@@ -230,21 +237,27 @@ function node(
         source,
         calleeExpression: string(candidate.calleeExpression, `${path}.calleeExpression`),
         args,
-        awaited: candidate.awaited === true,
+        awaited: boolean(candidate.awaited, `${path}.awaited`),
         targetFunctionId,
         boundary,
         annotation,
       };
     }
-    case "branch":
+    case "branch": {
+      const when = optionalString(candidate.when, `${path}.when`) as BranchNode["when"];
+      if (when && !["truthy", "falsy", "nullish", "non-nullish"].includes(when)) {
+        throw new FlowValidationError(`${path}.when is invalid`);
+      }
       return {
         id,
         kind,
         source,
         condition: string(candidate.condition, `${path}.condition`),
+        when,
         then: sequence(candidate.then, `${path}.then`),
         else: candidate.else === undefined ? undefined : sequence(candidate.else, `${path}.else`),
       };
+    }
     case "loop": {
       const loopKind = string(candidate.loopKind, `${path}.loopKind`) as LoopNode["loopKind"];
       if (!["for", "for-of", "for-in", "while", "do"].includes(loopKind)) {
@@ -261,12 +274,15 @@ function node(
         initializerFlow: candidate.initializerFlow === undefined ? undefined : sequence(candidate.initializerFlow, `${path}.initializerFlow`),
         conditionFlow: candidate.conditionFlow === undefined ? undefined : sequence(candidate.conditionFlow, `${path}.conditionFlow`),
         incrementorFlow: candidate.incrementorFlow === undefined ? undefined : sequence(candidate.incrementorFlow, `${path}.incrementorFlow`),
-        body: sequence(candidate.body, `${path}.body`),
+        body: sequence(candidate.body, `${path}.body`, [...activeLoopIds, id]),
       };
     }
     case "break":
-    case "continue":
-      return { id, kind, source, targetId: optionalString(candidate.targetId, `${path}.targetId`), targetLabel: optionalString(candidate.targetLabel, `${path}.targetLabel`) };
+    case "continue": {
+      const targetId = optionalString(candidate.targetId, `${path}.targetId`);
+      if (targetId && !activeLoopIds.includes(targetId)) throw new FlowValidationError(`unknown jump target: ${targetId}`);
+      return { id, kind, source, targetId, targetLabel: optionalString(candidate.targetLabel, `${path}.targetLabel`) };
+    }
     case "return":
     case "throw":
       return { id, kind, source, expression: optionalString(candidate.expression, `${path}.expression`) };
@@ -284,7 +300,7 @@ function node(
             }
           : undefined,
         finally: candidate.finally === undefined ? undefined : sequence(candidate.finally, `${path}.finally`),
-        finallyOverrides: candidate.finallyOverrides === true || undefined,
+        finallyOverrides: candidate.finallyOverrides === undefined ? undefined : boolean(candidate.finallyOverrides, `${path}.finallyOverrides`),
       };
     }
     case "unsupported":
@@ -327,7 +343,7 @@ export function validateFlowDocument(value: unknown): FlowDocument {
     const id = string(fn.id, `document.functions[${index}].id`);
     if (functionIds.has(id)) throw new FlowValidationError(`duplicate function id: ${id}`);
     functionIds.add(id);
-    const body = node(fn.body, `document.functions[${index}].body`, fileLengths, nodeIds, referencedFunctions);
+    const body = node(fn.body, `document.functions[${index}].body`, fileLengths, nodeIds, [], referencedFunctions);
     if (body.kind !== "sequence") throw new FlowValidationError(`document.functions[${index}].body must be a sequence`);
     return {
       id,
@@ -340,6 +356,7 @@ export function validateFlowDocument(value: unknown): FlowDocument {
     };
   });
   const roots = array(candidate.roots, "document.roots").map((entry, index) => string(entry, `document.roots[${index}]`));
+  if (new Set(roots).size !== roots.length) throw new FlowValidationError("document.roots contains duplicate ids");
   for (const id of [...roots, ...referencedFunctions]) {
     if (!functionIds.has(id)) throw new FlowValidationError(`unknown function reference: ${id}`);
   }
@@ -361,6 +378,33 @@ export function validateFlowDocument(value: unknown): FlowDocument {
       source: diagnostic.source === undefined ? undefined : span(diagnostic.source, `document.diagnostics[${index}].source`, fileLengths),
     };
   });
+  const fileCoverage = { scanned: number(coverageFiles.scanned, "document.coverage.files.scanned"), analyzed: number(coverageFiles.analyzed, "document.coverage.files.analyzed"), skipped: number(coverageFiles.skipped, "document.coverage.files.skipped") };
+  const functionCoverage = { discovered: number(coverageFunctions.discovered, "document.coverage.functions.discovered"), analyzed: number(coverageFunctions.analyzed, "document.coverage.functions.analyzed") };
+  const nodeCoverage = { supported: number(coverageNodes.supported, "document.coverage.nodes.supported"), unsupported: number(coverageNodes.unsupported, "document.coverage.nodes.unsupported") };
+  const countNodes = (entry: FlowNode): { supported: number; unsupported: number } => {
+    const nested = entry.kind === "sequence" ? entry.children
+      : entry.kind === "branch" ? [entry.then, ...(entry.else ? [entry.else] : [])]
+      : entry.kind === "loop" ? [entry.body, ...[entry.initializerFlow, entry.conditionFlow, entry.incrementorFlow].filter((child): child is SequenceNode => Boolean(child))]
+      : entry.kind === "try" ? [entry.body, ...[entry.catch?.body, entry.finally].filter((child): child is SequenceNode => Boolean(child))]
+      : [];
+    const children = nested.map(countNodes).reduce((total, child) => ({ supported: total.supported + child.supported, unsupported: total.unsupported + child.unsupported }), { supported: 0, unsupported: 0 });
+    if (entry.kind === "sequence") return children;
+    if (entry.kind === "unsupported") return { supported: children.supported, unsupported: children.unsupported + 1 };
+    return { supported: children.supported + 1, unsupported: children.unsupported };
+  };
+  const actualNodes = functions.map((fn) => countNodes(fn.body)).reduce((total, child) => ({ supported: total.supported + child.supported, unsupported: total.unsupported + child.unsupported }), { supported: 0, unsupported: 0 });
+  if (fileCoverage.scanned !== fileCoverage.analyzed + fileCoverage.skipped || fileCoverage.analyzed !== files.length) {
+    throw new FlowValidationError("document.coverage.files is inconsistent");
+  }
+  if (functionCoverage.discovered < functionCoverage.analyzed || functionCoverage.analyzed !== functions.length) {
+    throw new FlowValidationError("document.coverage.functions is inconsistent");
+  }
+  if (nodeCoverage.supported !== actualNodes.supported || nodeCoverage.unsupported !== actualNodes.unsupported) {
+    throw new FlowValidationError("document.coverage.nodes is inconsistent");
+  }
+  if (status === "complete" && (nodeCoverage.unsupported > 0 || diagnostics.length > 0)) {
+    throw new FlowValidationError("complete coverage cannot contain unsupported nodes or diagnostics");
+  }
   return {
     formatVersion: FORMAT_VERSION,
     producerVersion: string(candidate.producerVersion, "document.producerVersion"),
@@ -371,9 +415,9 @@ export function validateFlowDocument(value: unknown): FlowDocument {
     diagnostics,
     coverage: {
       status,
-      files: { scanned: number(coverageFiles.scanned, "document.coverage.files.scanned"), analyzed: number(coverageFiles.analyzed, "document.coverage.files.analyzed"), skipped: number(coverageFiles.skipped, "document.coverage.files.skipped") },
-      functions: { discovered: number(coverageFunctions.discovered, "document.coverage.functions.discovered"), analyzed: number(coverageFunctions.analyzed, "document.coverage.functions.analyzed") },
-      nodes: { supported: number(coverageNodes.supported, "document.coverage.nodes.supported"), unsupported: number(coverageNodes.unsupported, "document.coverage.nodes.unsupported") },
+      files: fileCoverage,
+      functions: functionCoverage,
+      nodes: nodeCoverage,
     },
   };
 }

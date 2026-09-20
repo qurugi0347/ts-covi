@@ -47,3 +47,36 @@ test("rejects unknown or malformed annotation fields", async () => {
   call.annotation = { label: "hello", html: "<b>unsafe</b>" };
   assert.throws(() => validateFlowDocument(document), /unknown fields/);
 });
+
+test("rejects coerced booleans and inconsistent coverage", async () => {
+  const booleanDocument = await loadSample();
+  const fn = (booleanDocument.functions as Array<Record<string, unknown>>)[0]!;
+  const body = fn.body as Record<string, unknown>;
+  (body.children as Array<Record<string, unknown>>)[0]!.awaited = "false";
+  assert.throws(() => validateFlowDocument(booleanDocument), /must be a boolean/);
+
+  const coverageDocument = await loadSample();
+  const coverage = coverageDocument.coverage as Record<string, unknown>;
+  (coverage.files as Record<string, unknown>).scanned = 2;
+  assert.throws(() => validateFlowDocument(coverageDocument), /coverage.files is inconsistent/);
+
+  const nodeCoverageDocument = await loadSample();
+  const nodeCoverage = nodeCoverageDocument.coverage as Record<string, unknown>;
+  (nodeCoverage.nodes as Record<string, unknown>).supported = 99;
+  assert.throws(() => validateFlowDocument(nodeCoverageDocument), /coverage.nodes is inconsistent/);
+});
+
+test("rejects invalid branch conditions and jump targets", async () => {
+  const branchDocument = await loadSample();
+  const fn = (branchDocument.functions as Array<Record<string, unknown>>)[0]!;
+  const body = fn.body as Record<string, unknown>;
+  const children = body.children as Array<Record<string, unknown>>;
+  children.push({ id: "bad-branch", kind: "branch", source: children[0]!.source, condition: "value", when: "always", then: { id: "bad-sequence", kind: "sequence", source: children[0]!.source, children: [] } });
+  assert.throws(() => validateFlowDocument(branchDocument), /when is invalid/);
+
+  const jumpDocument = await loadSample();
+  const jumpFn = (jumpDocument.functions as Array<Record<string, unknown>>)[0]!;
+  const jumpBody = jumpFn.body as Record<string, unknown>;
+  (jumpBody.children as Array<Record<string, unknown>>).push({ id: "bad-jump", kind: "break", source: (jumpBody.children as Array<Record<string, unknown>>)[0]!.source, targetId: "missing" });
+  assert.throws(() => validateFlowDocument(jumpDocument), /unknown jump target/);
+});
