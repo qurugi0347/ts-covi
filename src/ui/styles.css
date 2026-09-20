@@ -18,11 +18,21 @@ h1 { margin: .2rem 0; font-size: clamp(2rem, 5vw, 3.5rem); line-height: 1; }
 .functions, .inspector { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow: auto; padding: 1rem; }
 .functions label { display: block; margin-bottom: .4rem; font-size: .8rem; font-weight: 750; }
 .functions input { width: 100%; min-height: 44px; padding: .6rem .75rem; border: 1px solid #c7d0df; border-radius: .65rem; }
-.functions ul { padding: 0; margin: .75rem 0 0; list-style: none; }
+.functions ul { padding: 0; margin: .35rem 0 .75rem; list-style: none; }
 .functions button { display: flex; width: 100%; min-height: 44px; justify-content: space-between; align-items: center; padding: .65rem .75rem; border: 0; border-radius: .65rem; color: inherit; background: transparent; text-align: left; cursor: pointer; }
 .functions button:hover, .functions button.active { color: #4338ca; background: #eeedff; }
 .functions small, .badge { padding: .16rem .45rem; border-radius: 999px; font-size: .68rem; font-weight: 800; }
 .functions small { color: #166534; background: #dcfce7; }
+.mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: .35rem; margin-bottom: .8rem; }
+.mode-switch button { justify-content: center; border: 1px solid #dbe2ea; }
+.entry-group h2 { margin: .9rem 0 .2rem; color: #64748b; font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }
+.empty-list { color: #64748b; font-size: .82rem; }
+.entry-header { padding-bottom: .8rem; border-bottom: 1px solid #e2e8f0; }
+.entry-header > .badge { display: inline-flex; margin-bottom: .4rem; }
+.entry-header p { color: #92400e; }
+.target-list { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .75rem; }
+.target-list button { min-height: 44px; padding: .55rem .7rem; border: 1px solid #c7d0df; border-radius: .65rem; color: inherit; background: white; cursor: pointer; }
+.target-list button.active { color: #4338ca; border-color: #8b83f6; background: #eeedff; }
 .canvas { min-width: 0; padding: clamp(1rem, 2vw, 1.5rem); overflow: hidden; }
 .canvas > header { margin-bottom: 1rem; }
 .canvas h2, .inspector h2 { margin: 0 0 .4rem; }

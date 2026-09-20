@@ -1,6 +1,6 @@
 import React, { useState, type DragEvent } from "react";
 import { createRoot } from "react-dom/client";
-import { validateFlowDocument, type CallNode, type FlowDocument, type FlowNode, type SequenceNode } from "../model/flow.js";
+import { validateFlowDocument, type CallNode, type EntryPoint, type FlowDocument, type FlowNode, type SequenceNode, type SourceSpan } from "../model/flow.js";
 import { parseEmbeddedDocument } from "./embedded.js";
 import "./styles.css";
 
@@ -101,15 +101,28 @@ function FlowBlock({ node, document, ancestors, expanded, selectedNodeId, onTogg
   </article>;
 }
 
-function Inspector({ document, node }: { document: FlowDocument; node?: FlowNode }) {
-  if (!node) return <aside className="inspector"><h2>원문</h2><p>블록을 선택하면 코드와 위치를 표시합니다.</p></aside>;
-  const file = document.files.find((entry) => entry.id === node.source.fileId);
-  return <aside className="inspector"><h2>원문</h2><p className="source-location">{file?.path}:{node.source.startLine}:{node.source.startColumn}</p><pre><code>{file?.source.slice(node.source.start, node.source.end) ?? "원문을 찾을 수 없습니다."}</code></pre>{node.kind === "call" && <dl><dt>호출식</dt><dd>{node.calleeExpression}</dd><dt>await</dt><dd>{node.awaited ? "예" : "아니요"}</dd>{node.annotation?.label && <><dt>설명</dt><dd>{node.annotation.label}</dd></>}</dl>}</aside>;
+function Inspector({ document, node, source }: { document: FlowDocument; node?: FlowNode; source?: SourceSpan }) {
+  const selectedSource = node?.source ?? source;
+  if (!selectedSource) return <aside className="inspector"><h2>원문</h2><p>블록이나 원문 대상을 선택하면 코드와 위치를 표시합니다.</p></aside>;
+  const file = document.files.find((entry) => entry.id === selectedSource.fileId);
+  return <aside className="inspector"><h2>원문</h2><p className="source-location">{file?.path}:{selectedSource.startLine}:{selectedSource.startColumn}</p><pre><code>{file?.source.slice(selectedSource.start, selectedSource.end) ?? "원문을 찾을 수 없습니다."}</code></pre>{node?.kind === "call" && <dl><dt>호출식</dt><dd>{node.calleeExpression}</dd><dt>await</dt><dd>{node.awaited ? "예" : "아니요"}</dd>{node.annotation?.label && <><dt>설명</dt><dd>{node.annotation.label}</dd></>}</dl>}</aside>;
 }
+
+const listedEntryPoints = (flow?: FlowDocument): EntryPoint[] => flow?.entrypoints ?? flow?.roots.flatMap((id) => {
+  const fn = flow.functions.find((entry) => entry.id === id);
+  return fn ? [{ id: `legacy:${id}`, kind: "manual" as const, label: fn.description ?? fn.name, source: fn.source, targets: [{ role: "handler" as const, functionId: id, expression: fn.name, status: "complete" as const }], status: "complete" as const, reasons: [] }] : [];
+}) ?? [];
+
+const entryGroup = (entry: EntryPoint): string => entry.kind === "endpoint" ? "API" : entry.kind === "page" ? "페이지" : entry.kind === "script" ? "스크립트" : "수동";
 
 function App() {
   const [flow, setFlow] = useState<FlowDocument | undefined>(initialDocument.flow);
-  const [selectedFunctionId, setSelectedFunctionId] = useState<string | undefined>(() => initialDocument.flow?.roots[0] ?? initialDocument.flow?.functions[0]?.id);
+  const initialEntries = listedEntryPoints(initialDocument.flow);
+  const [mode, setMode] = useState<"entrypoints" | "functions">(() => initialEntries.length ? "entrypoints" : "functions");
+  const [selectedEntryPointId, setSelectedEntryPointId] = useState<string | undefined>(() => initialEntries[0]?.id);
+  const [selectedTargetIndex, setSelectedTargetIndex] = useState(0);
+  const [selectedFunctionId, setSelectedFunctionId] = useState<string | undefined>(() => initialEntries[0]?.targets[0]?.functionId ?? initialDocument.flow?.roots[0] ?? initialDocument.flow?.functions[0]?.id);
+  const [selectedModuleId, setSelectedModuleId] = useState<string | undefined>(() => initialEntries[0]?.targets[0]?.moduleId);
   const [selectedNodeId, setSelectedNodeId] = useState<string>();
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -119,32 +132,61 @@ function App() {
     try {
       if (file.size > MAX_FILE_SIZE) throw new Error("20 MB 이하의 JSON을 선택하세요.");
       const next = validateFlowDocument(JSON.parse(await file.text()));
+      const entries = listedEntryPoints(next);
       setFlow(next);
-      setSelectedFunctionId(next.roots[0] ?? next.functions[0]?.id);
+      setMode(entries.length ? "entrypoints" : "functions");
+      setSelectedEntryPointId(entries[0]?.id);
+      setSelectedTargetIndex(0);
+      setSelectedFunctionId(entries[0]?.targets[0]?.functionId ?? next.roots[0] ?? next.functions[0]?.id);
+      setSelectedModuleId(entries[0]?.targets[0]?.moduleId);
       setSelectedNodeId(undefined);
       setExpanded(new Set());
       setError("");
     } catch (cause) {
       setFlow(undefined);
+      setSelectedEntryPointId(undefined);
       setSelectedFunctionId(undefined);
+      setSelectedModuleId(undefined);
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   };
 
   const drop = (event: DragEvent<HTMLElement>) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) void load(file); };
+  const entrypoints = listedEntryPoints(flow);
+  const selectedEntryPoint = entrypoints.find((entry) => entry.id === selectedEntryPointId);
   const selectedFunction = flow?.functions.find((entry) => entry.id === selectedFunctionId);
-  const selectedNode = flow && selectedNodeId ? flow.functions.map((entry) => findNode(entry.body, selectedNodeId)).find(Boolean) : undefined;
+  const selectedModule = flow?.modules?.find((entry) => entry.id === selectedModuleId);
+  const selectedTarget = selectedEntryPoint?.targets[selectedTargetIndex];
+  const selectedNode = flow && selectedNodeId ? [...flow.functions, ...(flow.modules ?? [])].map((entry) => findNode(entry.body, selectedNodeId)).find(Boolean) : undefined;
   const functions = flow?.functions.filter((entry) => `${entry.name} ${entry.signature} ${entry.description ?? ""}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())) ?? [];
+  const normalizedQuery = query.toLocaleLowerCase();
+  const filteredEntries = entrypoints.filter((entry) => {
+    const targets = entry.targets.map((target) => flow?.functions.find((fn) => fn.id === target.functionId)?.name ?? target.expression).join(" ");
+    return `${entry.label} ${entry.path ?? ""} ${entry.method ?? ""} ${entry.framework ?? ""} ${entry.command ?? ""} ${targets}`.toLocaleLowerCase().includes(normalizedQuery);
+  });
+  const groups = [...new Set(filteredEntries.map(entryGroup))];
   const toggle = (id: string) => setExpanded((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  const selectTarget = (entry: EntryPoint, index: number) => {
+    const target = entry.targets[index];
+    setSelectedEntryPointId(entry.id);
+    setSelectedTargetIndex(index);
+    setSelectedFunctionId(target?.functionId);
+    setSelectedModuleId(target?.moduleId);
+    setSelectedNodeId(undefined);
+    setExpanded(new Set());
+  };
 
   return <main className="app" onDragOver={(event) => event.preventDefault()} onDrop={drop}>
     <header className="hero"><div><span className="eyebrow">STATIC FLOW VIEWER</span><h1>ts-covi</h1><p>생성된 분석 결과를 표시합니다. 다른 JSON을 선택하거나 화면에 놓아 바꿀 수 있습니다.</p></div><label className="picker">JSON 선택<input type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void load(file); }} /></label></header>
     {error && <p className="error" role="alert">{error}</p>}
     {flow?.coverage.status === "partial" && <section className="partial" role="status"><strong>부분 분석 결과</strong><span>미지원 또는 미해결 항목 {flow.diagnostics.length}개를 확인하세요.</span></section>}
     {flow && <div className="workspace">
-      <aside className="functions" aria-label="함수 목록"><label htmlFor="function-search">함수 검색</label><input id="function-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} /><ul>{functions.map((fn) => <li key={fn.id}><button type="button" className={fn.id === selectedFunctionId ? "active" : ""} aria-pressed={fn.id === selectedFunctionId} onClick={() => { setSelectedFunctionId(fn.id); setSelectedNodeId(undefined); }}><span>{fn.name}</span>{flow.roots.includes(fn.id) && <small>root</small>}</button></li>)}</ul></aside>
-      <section className="canvas" aria-label="함수 흐름">{selectedFunction ? <><header><h2>{selectedFunction.description ?? selectedFunction.name}</h2><code>{selectedFunction.signature}</code></header><NodeList sequence={selectedFunction.body} document={flow} ancestors={[selectedFunction.id]} expanded={expanded} selectedNodeId={selectedNodeId} onToggle={toggle} onSelect={setSelectedNodeId} /></> : <p>함수를 선택하세요.</p>}</section>
-      <Inspector document={flow} node={selectedNode} />
+      <aside className="functions" aria-label="탐색 목록"><div className="mode-switch" aria-label="탐색 단위"><button type="button" className={mode === "entrypoints" ? "active" : ""} aria-pressed={mode === "entrypoints"} onClick={() => setMode("entrypoints")}>진입점</button><button type="button" className={mode === "functions" ? "active" : ""} aria-pressed={mode === "functions"} onClick={() => setMode("functions")}>전체 함수</button></div><label htmlFor="function-search">{mode === "entrypoints" ? "진입점 검색" : "함수 검색"}</label><input id="function-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} />
+        {mode === "entrypoints" ? entrypoints.length ? groups.map((group) => <section className="entry-group" key={group}><h2>{group}</h2><ul>{filteredEntries.filter((entry) => entryGroup(entry) === group).map((entry) => <li key={entry.id}><button type="button" className={entry.id === selectedEntryPointId ? "active" : ""} aria-pressed={entry.id === selectedEntryPointId} onClick={() => selectTarget(entry, 0)}><span>{entry.method ? `${entry.method} ` : ""}{entry.path ?? entry.label}</span><small>{entry.status === "partial" ? "부분" : entry.framework ?? entry.kind}</small></button></li>)}</ul></section>) : <p className="empty-list">발견된 진입점이 없습니다. <code>@covi-root</code>로 지정할 수 있습니다.</p> : <ul>{functions.map((fn) => <li key={fn.id}><button type="button" className={fn.id === selectedFunctionId && !selectedEntryPointId ? "active" : ""} aria-pressed={fn.id === selectedFunctionId && !selectedEntryPointId} onClick={() => { setSelectedEntryPointId(undefined); setSelectedFunctionId(fn.id); setSelectedModuleId(undefined); setSelectedNodeId(undefined); }}><span>{fn.name}</span>{flow.roots.includes(fn.id) && <small>root</small>}</button></li>)}</ul>}
+        {mode === "entrypoints" && entrypoints.length > 0 && filteredEntries.length === 0 && <p className="empty-list">검색 결과가 없습니다.</p>}
+      </aside>
+      <section className="canvas" aria-label="선택한 흐름">{selectedEntryPoint && <header className="entry-header"><span className="badge boundary">{entryGroup(selectedEntryPoint)}</span><h2>{selectedEntryPoint.label}</h2>{selectedEntryPoint.command && <code>{selectedEntryPoint.command}</code>}{selectedEntryPoint.reasons.map((reason) => <p key={reason}>{reason}</p>)}{selectedEntryPoint.targets.length > 1 && <div className="target-list" aria-label="진입 대상">{selectedEntryPoint.targets.map((target, index) => <button key={`${target.role}:${index}`} type="button" className={index === selectedTargetIndex ? "active" : ""} aria-pressed={index === selectedTargetIndex} onClick={() => selectTarget(selectedEntryPoint, index)}>{target.role}: {target.expression}</button>)}</div>}</header>}{selectedFunction ? <><header><h2>{selectedFunction.description ?? selectedFunction.name}</h2><code>{selectedFunction.signature}</code></header><NodeList sequence={selectedFunction.body} document={flow} ancestors={[selectedFunction.id]} expanded={expanded} selectedNodeId={selectedNodeId} onToggle={toggle} onSelect={setSelectedNodeId} /></> : selectedModule ? <><header><h2>{selectedEntryPoint?.label ?? selectedModule.id}</h2><code>{selectedModule.id}</code></header><NodeList sequence={selectedModule.body} document={flow} ancestors={[]} expanded={expanded} selectedNodeId={selectedNodeId} onToggle={toggle} onSelect={setSelectedNodeId} /></> : selectedTarget ? <p>{selectedTarget.reason ?? "연결된 함수 본문 없이 원문만 확인할 수 있습니다."}</p> : <p>{mode === "entrypoints" ? "진입점을 선택하세요." : "함수를 선택하세요."}</p>}</section>
+      <Inspector document={flow} node={selectedNode} source={!selectedNode ? selectedTarget?.source ?? selectedEntryPoint?.source : undefined} />
     </div>}
     {flow && <details className="diagnostics"><summary>진단 {flow.diagnostics.length}개</summary>{flow.diagnostics.length ? <ul>{flow.diagnostics.map((item, index) => <li key={`${item.code}:${index}`}><strong>{item.code}</strong> {item.message}</li>)}</ul> : <p>진단이 없습니다.</p>}</details>}
   </main>;

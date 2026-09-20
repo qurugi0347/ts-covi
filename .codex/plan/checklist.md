@@ -19,8 +19,8 @@ status: draft
 
 - [x] E1 entrypoints v1 optional 확장·검증·수동 roots 매핑
 - [x] E1 검증: 구형 JSON·깨진 참조·복수 target assertion
-- [ ] E2 진입점/전체 함수 모드·그룹·검색·선택 분리
-- [ ] E2 검증: 0건·복수 URL·JSON 교체·source-only·키보드/320px
+- [x] E2 진입점/전체 함수 모드·그룹·검색·선택 분리
+- [x] E2 검증: 0건·복수 URL·JSON 교체·source-only·키보드/320px
 
 ## Phase 2 — 스크립트 (S1)
 
