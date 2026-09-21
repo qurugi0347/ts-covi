@@ -160,60 +160,76 @@ const detectNest = (sourceFile: ts.SourceFile, fileId: string, imports: Map<stri
   return entries;
 };
 
-const detectExpress = (sourceFile: ts.SourceFile, fileId: string, imports: Map<string, ImportRef>, input: Input): EntryPoint[] => {
-  const routerKinds = new Map<string, "app" | "router">();
-  const mounts: Array<{ parent: string; child: string; path?: string }> = [];
-  const registrations: Array<{ call: ts.CallExpression; router: string; method: string; route?: string; handlers: ts.Expression[] }> = [];
+const detectExpress = (input: Input): EntryPoint[] => {
+  type RouterKey = ts.VariableDeclaration;
+  const routerKinds = new Map<RouterKey, "app" | "router">();
+  const mounts: Array<{ parent: RouterKey; child: RouterKey; path?: string }> = [];
+  const registrations: Array<{ call: ts.CallExpression; sourceFile: ts.SourceFile; fileId: string; router: RouterKey; method: string; route?: string; handlers: ts.Expression[] }> = [];
   const expressModules = new Set(["express"]);
-  const isFactory = (call: ts.CallExpression, kind: "app" | "router"): boolean => kind === "app"
-    ? importedCall(call.expression, imports, expressModules, new Set(["default", "*"]))
-    : importedCall(call.expression, imports, expressModules, new Set(["Router"]));
-  for (const statement of sourceFile.statements) {
-    if (!ts.isVariableStatement(statement)) continue;
-    for (const declaration of statement.declarationList.declarations) {
-      if (!ts.isIdentifier(declaration.name) || !declaration.initializer || !ts.isCallExpression(declaration.initializer)) continue;
-      if (isFactory(declaration.initializer, "app")) routerKinds.set(declaration.name.text, "app");
-      if (isFactory(declaration.initializer, "router") || (ts.isPropertyAccessExpression(declaration.initializer.expression) && ts.isIdentifier(declaration.initializer.expression.expression) && imports.has(declaration.initializer.expression.expression.text) && declaration.initializer.expression.name.text === "Router")) routerKinds.set(declaration.name.text, "router");
+  const routerKey = (identifier: ts.Identifier): RouterKey | undefined => {
+    let symbol = input.checker.getSymbolAtLocation(identifier);
+    if (symbol?.flags && symbol.flags & ts.SymbolFlags.Alias) symbol = input.checker.getAliasedSymbol(symbol);
+    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    return declaration && ts.isVariableDeclaration(declaration) ? declaration : undefined;
+  };
+  for (const sourceFile of input.sourceFiles) {
+    const imports = importsFor(sourceFile);
+    const isFactory = (call: ts.CallExpression, kind: "app" | "router"): boolean => kind === "app"
+      ? importedCall(call.expression, imports, expressModules, new Set(["default", "*"]))
+      : importedCall(call.expression, imports, expressModules, new Set(["Router"]));
+    for (const statement of sourceFile.statements) {
+      if (!ts.isVariableStatement(statement)) continue;
+      for (const declaration of statement.declarationList.declarations) {
+        if (!ts.isIdentifier(declaration.name) || !declaration.initializer || !ts.isCallExpression(declaration.initializer)) continue;
+        if (isFactory(declaration.initializer, "app")) routerKinds.set(declaration, "app");
+        if (isFactory(declaration.initializer, "router")) routerKinds.set(declaration, "router");
+      }
     }
   }
-  const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
-      const method = node.expression.name.text.toLowerCase();
-      let router: string | undefined;
-      let routeExpression: ts.Expression | undefined;
-      let handlers: ts.Expression[] = [];
-      if (ts.isIdentifier(node.expression.expression)) {
-        router = node.expression.expression.text;
-        routeExpression = node.arguments[0];
-        handlers = node.arguments.slice(1);
-      } else if (ts.isCallExpression(node.expression.expression) && ts.isPropertyAccessExpression(node.expression.expression.expression) && node.expression.expression.expression.name.text === "route" && ts.isIdentifier(node.expression.expression.expression.expression)) {
-        router = node.expression.expression.expression.expression.text;
-        routeExpression = node.expression.expression.arguments[0];
-        handlers = [...node.arguments];
+  for (const sourceFile of input.sourceFiles) {
+    const context = sourceContext(sourceFile, input);
+    if (!context) continue;
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+        const method = node.expression.name.text.toLowerCase();
+        let receiver: ts.Identifier | undefined;
+        let routeExpression: ts.Expression | undefined;
+        let handlers: ts.Expression[] = [];
+        if (ts.isIdentifier(node.expression.expression)) {
+          receiver = node.expression.expression;
+          routeExpression = node.arguments[0];
+          handlers = node.arguments.slice(1);
+        } else if (ts.isCallExpression(node.expression.expression) && ts.isPropertyAccessExpression(node.expression.expression.expression) && node.expression.expression.expression.name.text === "route" && ts.isIdentifier(node.expression.expression.expression.expression)) {
+          receiver = node.expression.expression.expression.expression;
+          routeExpression = node.expression.expression.arguments[0];
+          handlers = [...node.arguments];
+        }
+        const parent = receiver ? routerKey(receiver) : undefined;
+        const directMount = method === "use" && routeExpression && ts.isIdentifier(routeExpression) ? routerKey(routeExpression) : undefined;
+        const mountedExpression = directMount ? routeExpression : handlers[0];
+        const child = mountedExpression && ts.isIdentifier(mountedExpression) ? routerKey(mountedExpression) : undefined;
+        if (parent && routerKinds.has(parent) && method === "use" && child && routerKinds.has(child)) {
+          mounts.push({ parent, child, path: directMount ? "" : staticStrings(routeExpression, input.checker)?.[0] });
+        } else if (parent && routerKinds.has(parent) && HTTP_METHODS.has(method)) {
+          registrations.push({ call: node, sourceFile, fileId: context.fileId, router: parent, method, route: staticStrings(routeExpression, input.checker)?.[0], handlers });
+        }
       }
-      const directMount = method === "use" && routeExpression && ts.isIdentifier(routeExpression) && routerKinds.has(routeExpression.text);
-      const mountedRouter = directMount ? routeExpression : handlers[0];
-      if (routerKinds.has(router ?? "") && method === "use" && mountedRouter && ts.isIdentifier(mountedRouter) && routerKinds.has(mountedRouter.text)) {
-        mounts.push({ parent: router!, child: mountedRouter.text, path: directMount ? "" : staticStrings(routeExpression, input.checker)?.[0] });
-      } else if (routerKinds.has(router ?? "") && HTTP_METHODS.has(method)) {
-        registrations.push({ call: node, router: router!, method, route: staticStrings(routeExpression, input.checker)?.[0], handlers });
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
-  const prefixes = (router: string, seen = new Set<string>()): Array<string | undefined> => {
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+  }
+  const prefixes = (router: RouterKey, seen = new Set<RouterKey>()): Array<string | undefined> => {
     if (seen.has(router)) return [undefined];
     const incoming = mounts.filter((mount) => mount.child === router);
-    if (!incoming.length) return [""];
+    if (!incoming.length) return [routerKinds.get(router) === "app" ? "" : undefined];
     seen.add(router);
     return incoming.flatMap((mount) => prefixes(mount.parent, new Set(seen)).map((base) => base === undefined || mount.path === undefined ? undefined : joinPath(base, mount.path)));
   };
   return registrations.flatMap((registration) => prefixes(registration.router).map((prefix, index) => {
     const routePath = prefix === undefined || registration.route === undefined ? undefined : joinPath(prefix, registration.route);
-    const targets = registration.handlers.map((handler, handlerIndex) => target(handlerIndex === registration.handlers.length - 1 ? "handler" : "middleware", handler, input, sourceFile, fileId));
-    if (!targets.length) targets.push({ role: "handler", source: input.span(sourceFile, fileId, registration.call), expression: registration.call.getText(sourceFile), status: "partial", reason: "등록된 handler가 없습니다." });
-    return finalize({ id: `entry:express:${fileId}:${registration.call.getStart(sourceFile)}:${index}`, kind: "endpoint", framework: "express", label: `${registration.method.toUpperCase()} ${routePath ?? "동적 경로"}`, path: routePath, method: registration.method.toUpperCase(), source: input.span(sourceFile, fileId, registration.call), targets }, routePath === undefined ? ["동적 경로 또는 순환 mount를 해석할 수 없습니다."] : []);
+    const targets = registration.handlers.map((handler, handlerIndex) => target(handlerIndex === registration.handlers.length - 1 ? "handler" : "middleware", handler, input, registration.sourceFile, registration.fileId));
+    if (!targets.length) targets.push({ role: "handler", source: input.span(registration.sourceFile, registration.fileId, registration.call), expression: registration.call.getText(registration.sourceFile), status: "partial", reason: "등록된 handler가 없습니다." });
+    return finalize({ id: `entry:express:${registration.fileId}:${registration.call.getStart(registration.sourceFile)}:${index}`, kind: "endpoint", framework: "express", label: `${registration.method.toUpperCase()} ${routePath ?? "동적 경로"}`, path: routePath, method: registration.method.toUpperCase(), source: input.span(registration.sourceFile, registration.fileId, registration.call), targets }, routePath === undefined ? ["동적 경로 또는 mount를 정적으로 연결할 수 없습니다."] : []);
   }));
 };
 
@@ -307,14 +323,13 @@ const jsxRouteEntries = (sourceFile: ts.SourceFile, fileId: string, imports: Map
 };
 
 export const detectEntryPoints = (input: Input): EntryPoint[] => {
-  const entries: EntryPoint[] = [];
+  const entries: EntryPoint[] = detectExpress(input);
   for (const sourceFile of input.sourceFiles) {
     const relative = posix(path.relative(input.projectRoot, realpathSync(sourceFile.fileName)));
     const fileId = input.fileIds.get(relative);
     if (!fileId) continue;
     const imports = importsFor(sourceFile);
     entries.push(...detectNest(sourceFile, fileId, imports, input));
-    entries.push(...detectExpress(sourceFile, fileId, imports, input));
     const visit = (node: ts.Node): void => {
       if (ts.isCallExpression(node)) {
         if (importedCall(node.expression, imports, new Set(["react-router", "react-router-dom"]), new Set(["createBrowserRouter", "createHashRouter", "useRoutes"])) && node.arguments[0]) {
