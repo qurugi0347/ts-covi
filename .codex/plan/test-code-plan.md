@@ -58,19 +58,6 @@ status: deferred
 - When: CLI HTML 생성 후 파일 열기
 - Then: 텍스트로 안전하게 표시, 로컬 네트워크 요청 없이 내장 결과 표시, JSON/HTML 동일 스냅샷
 
-## 스크립트 진입점 — 후속 TestCode PR
+## 스크립트 진입점 — 제외
 
-### 추가: 실행 파일 탐지
-- Given: 단순 tsx/ts-node scripts, TS bin, 별칭 두 개, --entry include 밖 TS, JS bin/복잡한 shell
-- When: CLI 입력 해석 후 분석
-- Then: 적격 파일을 Program에 포함하고 각 entry가 동일 module을 재사용; JS/shell 자동 탐지는 partial, 명시 오류는 exit 1; 어떤 명령도 실행하지 않음
-
-### 추가: 최상위 구조와 호환성
-- Given: 변수 초기화, await main(), IIFE, 함수 선언, import 부작용, 구형 modules 없는 JSON
-- When: 분석 후 validator/내장 HTML 로딩
-- Then: module의 소스 순서와 함수 참조 보존, 함수 본문 중복 없음, import 효과 미지원 경계 표시, 구형 입력 허용, moduleCoverage와 함수 coverage 독립 집계
-
-### 추가: 안전성과 선택
-- Given: 루트 밖 symlink/ignored entry, 여러 script 별칭, source 없는 미해결 entry
-- When: 분석 및 UI script/함수 전환·JSON 교체
-- Then: 외부 소스 비노출, fake source span 없음, 선택 상태 분리와 초기화, 오류 설명 표시
+사용자 피드백으로 신규 script 진입점 생성이 제거되어 아래 회귀 테스트 계획은 진행하지 않는다. 기존 script/module JSON 읽기 호환은 model/UI 호환 테스트 범위에서만 유지한다.

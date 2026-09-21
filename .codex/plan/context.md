@@ -61,3 +61,7 @@ NestJS/Express/API, React Router 페이지, Vue Router 페이지/원문까지 �
 목적은 프레임워크 없는 실행 파일도 진입점에서 탐색하는 것이다. analyze.ts의 supportedFunction 인덱스와 analyzeBody 호출을 재확인했고, 현재 파일 최상위 호출/await/조건문은 실행 단위로 수집되지 않는다. package.json에 tsx 명령과 dist JS bin이 있는 것도 확인했다. 따라서 현재 저장소의 bin을 원본 TS로 자동 연결한다고 보장하지 않는다.
 
 선택: 공통 UI 뒤 S1을 추가한다. scripts/bin/명시 --entry로 실행 파일을 찾고, modules 선택적 필드와 별도 moduleCoverage로 함수와 구분한다. 최상위 블록 분석과 함수 호출 펼치기는 기존 로직을 재사용한다. 복잡한 shell과 JS sourcemap은 후속 범위이며 실행 파일 지정으로 보완한다. 제품 코드는 수정하지 않고 draft 계획 5종만 동기화한다.
+
+## 스크립트 범위 철회
+
+2026-09-21 사용자 피드백에 따라 신규 분석에서는 package script, bin, `--entry`를 진입점으로 만들지 않는다. analyzer와 CLI의 탐지 경로는 제거하고, 이미 생성된 JSON을 계속 열 수 있도록 model validator와 UI의 script/module 읽기 호환만 유지한다.

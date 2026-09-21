@@ -9,6 +9,8 @@ status: implemented
 
 [Architecture](architecture.html) → [맥락](context.md) → [체크리스트](checklist.md). 이전 M1~M6 완료 기록은 [보관 문서](completed-v1/plan.md)에 유지한다. 이 계획의 제품 구현과 단계별 commit은 완료했으며 push/PR은 수행하지 않았다.
 
+> 2026-09-21 후속 결정: 신규 script 진입점 생성은 제품 범위에서 제외했다. 아래 S1 내용은 구현 이력이며 기존 JSON 읽기 호환만 유지한다.
+
 ## 목표와 완료 조건
 
 함수 검색 위치에서 API endpoint·페이지·스크립트·수동 진입점을 먼저 선택하고 해당 함수의 기존 중첩 블록으로 이동한다. 전체 함수 검색은 별도 모드로 유지한다. NestJS, Express, React Router, Vue Router의 아래 명시된 정적 선언 범위를 단계적으로 지원한다.

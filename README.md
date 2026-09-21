@@ -43,12 +43,6 @@ ts-covi analyze --project ./tsconfig.json --out ./.covi/flow.json
 
 대상 저장소 루트에서 실행하면 `.covi/flow.json`과 `.covi/index.html`이 생긴다. 분석 결과가 partial이면 파일을 정상 생성한 뒤 종료 코드 `2`를 반환하므로 package script나 CI에서는 이를 구분해야 한다.
 
-tsconfig의 `include` 밖에 있는 실행 파일은 반복 가능한 `--entry`로 추가한다.
-
-```bash
-ts-covi analyze --project ./tsconfig.json --entry ./scripts/seed.ts --entry ./scripts/job.ts
-```
-
 종료 코드는 `0`=complete 저장, `1`=설정·읽기·저장 실패, `2`=partial 저장이다. 출력은 같은 디렉터리의 임시 파일을 검증한 뒤 교체하며, 실패하면 이전 파일을 보존한다. symlink 출력은 교체하지 않는다.
 
 ## 지원 범위
@@ -61,16 +55,15 @@ ts-covi analyze --project ./tsconfig.json --entry ./scripts/seed.ts --entry ./sc
 - try/catch/finally와 finally 종료 덮어쓰기
 - 직접 호출과 import alias, 외부·미해결·런타임 경계
 - `@covi`, `@covi-root`, `@covi-group`, 바로 다음 문장의 `@covi-call` JSON
-- 프로젝트 루트 `package.json`의 직접 `tsx`/`ts-node` script, TS/TSX bin, `--entry` 실행 파일
 - NestJS controller/method decorator와 Express app/Router endpoint
 - React Router route object·`Routes`/`Route` JSX 페이지
 - Vue Router route와 저장소 내부 `.vue` 원문
 
-뷰어는 기본적으로 API·페이지·스크립트·수동 진입점을 그룹별로 보여 주며, `전체 함수` 모드에서 기존 함수 목록을 그대로 탐색할 수 있다. endpoint의 middleware/handler와 페이지의 component/loader/action은 각각 별도 대상으로 표시한다. 스크립트는 파일 최상위 실행 블록을 함수와 구분해 저장하고, 그 안의 정적 함수 호출은 기존 함수 블록으로 펼친다.
+뷰어는 기본적으로 API·페이지·수동 진입점을 그룹별로 보여 주며, `전체 함수` 모드에서 기존 함수 목록을 그대로 탐색할 수 있다. endpoint의 middleware/handler와 페이지의 component/loader/action은 각각 별도 대상으로 표시한다. package script와 bin은 진입점으로 만들지 않는다.
 
 함수 정의는 `functions`에 한 번 저장하고 호출은 ID로 참조한다. 주석 설명과 코드의 인자 표현식은 별도 필드다. 알 수 없는 구문과 호출은 원문·위치·진단을 남기며, 실제 분기 결과·인자 값·반복 횟수·Promise 완료 순서를 추측하지 않는다.
 
-복합 shell script, JS bin의 원본 역추적, 런타임 route 등록, NestJS global prefix/version, 동적 Express mount, lazy route factory는 partial로 남긴다. Vue SFC는 페이지 원문만 연결하며 내부 함수 흐름은 분석하지 않는다. package script 원문은 JSON 스냅샷에 포함된다. 실제 middleware 완료 순서, React 렌더링/effect, 비동기 callback 완료 시점은 추측하지 않는다.
+런타임 route 등록, NestJS global prefix/version, 동적 Express mount, lazy route factory는 partial로 남긴다. Vue SFC는 페이지 원문만 연결하며 내부 함수 흐름은 분석하지 않는다. 실제 middleware 완료 순서, React 렌더링/effect, 비동기 callback 완료 시점은 추측하지 않는다.
 
 그 밖의 현재 경계는 project references, generator/yield 의미, 동적 속성 호출, 런타임 DI와 다중 구현체다. 일반 JSX는 opaque 표현식으로 남는다. SQLite, 증분 분석, 런타임 trace, AI 설명, IDE 통합은 포함하지 않는다.
 
@@ -104,7 +97,5 @@ async function createOrder(token: string, total: number) {
 | viewer 로딩 중앙값 | 60.8ms |
 
 자체 분석 결과는 170개 함수, supported 1,478개, unsupported 11개, 진단 46개로 partial이었다. `fixtures/order`는 순차 호출·검증 if/throw·reduce callback 경계·await 호출·저장·알림·return을 독립적으로 검증하며 complete 결과를 만든다.
-
-2026-09-21에는 같은 Darwin/Node/pnpm 환경에서 `main` 2743e1a와 진입점 구현을 각각 3회 자체 분석했다. 중앙값 기준 분석 시간은 1.78s → 1.94s, peak RSS는 442,499,072 → 455,540,736 bytes, JSON은 2,055,004 → 3,368,483 bytes였다. JSON 증가는 스크립트 모듈과 진입점 메타데이터, 새 분석기 소스 자체가 스냅샷에 포함된 결과다.
 
 계획과 검증 근거는 [구조 개요](.codex/plan/architecture.html), [개발 계획](.codex/plan/plan.md), [작업 맥락](.codex/plan/context.md), [체크리스트](.codex/plan/checklist.md)에 있다.
