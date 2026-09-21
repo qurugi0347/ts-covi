@@ -2,7 +2,7 @@
 name: ts-covi-entrypoints-checklist
 description: 진입점 탐색 단계별 실행 체크리스트
 created: 2026-09-21
-status: review
+status: complete
 ---
 
 # 진입점 탐색 체크리스트
@@ -51,7 +51,7 @@ status: review
 - [x] E7 구형 JSON 교체·악성 label 텍스트 처리·partial exit 2 유지
 - [x] E7 분석/로딩/메모리/출력 크기 전후 비교 및 미실행 검증 기록
 - [x] E7 README/HANDOFF 지원 경계 갱신
-- [ ] E8 사용자 결과 확인 및 피드백 반영
+- [x] E8 사용자 결과 확인 및 피드백 반영
 - [x] E8 원본 작업 완료와 commit/PR 준비; 실제 Git 작업은 승인 범위에서만
 
 ## 후속 TestCode PR — 보류

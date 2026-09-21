@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { copyFile, lstat, mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { analyzeProject } from "../analyzer/analyze.js";
 import { validateFlowDocument } from "../model/flow.js";
 import { embedFlowDocument, loadViewerTemplate } from "./viewer.js";
@@ -108,4 +110,6 @@ export async function run(args: string[], viewerTemplate?: string): Promise<numb
   }
 }
 
-if (import.meta.url === new URL(process.argv[1]!, "file:").href) process.exitCode = await run(process.argv.slice(2));
+let isMain = false;
+try { isMain = process.argv[1] !== undefined && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url); } catch { /* Imported modules do not need a CLI entry path. */ }
+if (isMain) process.exitCode = await run(process.argv.slice(2));

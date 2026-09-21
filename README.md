@@ -17,6 +17,15 @@ pnpm build
 
 ## 사용법
 
+다른 로컬 저장소에서도 `ts-covi` 명령을 사용하려면 이 저장소에서 한 번 설치한다.
+
+```bash
+pnpm install --frozen-lockfile
+pnpm install:global
+```
+
+이 설치는 현재 checkout을 전역 pnpm 명령에 연결한다. ts-covi 코드를 변경한 뒤에는 `pnpm install:global`을 다시 실행한다. 제거는 `pnpm remove --global ts-covi`로 한다.
+
 프로젝트의 `tsconfig.json`을 분석한다. 기본 출력은 프로젝트 루트의 `.covi/flow.json`이다. 상대 `--out` 경로도 현재 작업 디렉터리가 아니라 `tsconfig.json`이 있는 프로젝트 루트를 기준으로 해석한다.
 
 ```bash
@@ -31,6 +40,8 @@ CLI는 프로젝트 루트의 `.covi/flow.json`과 `.covi/index.html`을 함께 
 ```bash
 ts-covi analyze --project ./tsconfig.json --out ./.covi/flow.json
 ```
+
+대상 저장소 루트에서 실행하면 `.covi/flow.json`과 `.covi/index.html`이 생긴다. 분석 결과가 partial이면 파일을 정상 생성한 뒤 종료 코드 `2`를 반환하므로 package script나 CI에서는 이를 구분해야 한다.
 
 tsconfig의 `include` 밖에 있는 실행 파일은 반복 가능한 `--entry`로 추가한다.
 

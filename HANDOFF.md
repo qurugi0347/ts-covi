@@ -6,6 +6,8 @@ M1~M6와 진입점 중심 탐색 구현이 `feature/entrypoint-navigation`에 �
 
 스크립트는 직접 `tsx`/`ts-node` package script, TS/TSX bin, 반복 가능한 `--entry`를 지원한다. 프레임워크 진입점은 NestJS decorator, Express app/Router, React Router route object/JSX, Vue Router route를 import 출처가 확인된 경우에 탐지한다. Vue SFC는 저장소 내부 원문까지만 연결한다.
 
+다른 로컬 저장소에서 사용하려면 이 저장소에서 `pnpm install:global`을 실행한다. pnpm 전역 wrapper의 symlink 경로를 realpath로 판별하므로 `ts-covi analyze --project ./tsconfig.json`이 대상 저장소에서 직접 동작한다.
+
 ## 검증
 
 - `pnpm test`: 17개 통과
