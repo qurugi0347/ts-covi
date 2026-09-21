@@ -1,10 +1,8 @@
-import React, { useState, type DragEvent } from "react";
+import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { validateFlowDocument, type CallNode, type EntryPoint, type FlowDocument, type FlowNode, type SequenceNode, type SourceSpan } from "../model/flow.js";
+import { type CallNode, type EntryPoint, type FlowDocument, type FlowNode, type SequenceNode, type SourceSpan } from "../model/flow.js";
 import { parseEmbeddedDocument } from "./embedded.js";
 import "./styles.css";
-
-const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
 const initialDocument = parseEmbeddedDocument(document.getElementById("ts-covi-data")?.textContent ?? undefined);
 
@@ -116,7 +114,7 @@ const listedEntryPoints = (flow?: FlowDocument): EntryPoint[] => flow?.entrypoin
 const entryGroup = (entry: EntryPoint): string => entry.kind === "endpoint" ? "API" : entry.kind === "page" ? "페이지" : entry.kind === "script" ? "스크립트" : "수동";
 
 function App() {
-  const [flow, setFlow] = useState<FlowDocument | undefined>(initialDocument.flow);
+  const flow = initialDocument.flow;
   const initialEntries = listedEntryPoints(initialDocument.flow);
   const [mode, setMode] = useState<"entrypoints" | "functions">(() => initialEntries.length ? "entrypoints" : "functions");
   const [selectedEntryPointId, setSelectedEntryPointId] = useState<string | undefined>(() => initialEntries[0]?.id);
@@ -126,32 +124,7 @@ function App() {
   const [selectedNodeId, setSelectedNodeId] = useState<string>();
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [error, setError] = useState(initialDocument.error ?? "");
-
-  const load = async (file: File) => {
-    try {
-      if (file.size > MAX_FILE_SIZE) throw new Error("20 MB 이하의 JSON을 선택하세요.");
-      const next = validateFlowDocument(JSON.parse(await file.text()));
-      const entries = listedEntryPoints(next);
-      setFlow(next);
-      setMode(entries.length ? "entrypoints" : "functions");
-      setSelectedEntryPointId(entries[0]?.id);
-      setSelectedTargetIndex(0);
-      setSelectedFunctionId(entries[0]?.targets[0]?.functionId ?? next.roots[0] ?? next.functions[0]?.id);
-      setSelectedModuleId(entries[0]?.targets[0]?.moduleId);
-      setSelectedNodeId(undefined);
-      setExpanded(new Set());
-      setError("");
-    } catch (cause) {
-      setFlow(undefined);
-      setSelectedEntryPointId(undefined);
-      setSelectedFunctionId(undefined);
-      setSelectedModuleId(undefined);
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-  };
-
-  const drop = (event: DragEvent<HTMLElement>) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) void load(file); };
+  const error = initialDocument.error ?? "";
   const entrypoints = listedEntryPoints(flow);
   const selectedEntryPoint = entrypoints.find((entry) => entry.id === selectedEntryPointId);
   const selectedFunction = flow?.functions.find((entry) => entry.id === selectedFunctionId);
@@ -176,8 +149,8 @@ function App() {
     setExpanded(new Set());
   };
 
-  return <main className="app" onDragOver={(event) => event.preventDefault()} onDrop={drop}>
-    <header className="hero"><div><span className="eyebrow">STATIC FLOW VIEWER</span><h1>ts-covi</h1><p>생성된 분석 결과를 표시합니다. 다른 JSON을 선택하거나 화면에 놓아 바꿀 수 있습니다.</p></div><label className="picker">JSON 선택<input type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void load(file); }} /></label></header>
+  return <main className="app">
+    <header className="hero"><div><span className="eyebrow">STATIC FLOW VIEWER</span><h1>ts-covi</h1><p>같이 생성된 <code>flow.json</code> 분석 결과를 표시합니다.</p></div></header>
     {error && <p className="error" role="alert">{error}</p>}
     {flow?.coverage.status === "partial" && <section className="partial" role="status"><strong>부분 분석 결과</strong><span>미지원 또는 미해결 항목 {flow.diagnostics.length}개를 확인하세요.</span></section>}
     {flow && <div className="workspace">

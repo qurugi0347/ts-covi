@@ -18,7 +18,7 @@ status: implemented
 - 신규 JSON과 기존 v1 JSON 모두 읽는다. 같은 함수에 연결되는 복수 URL은 각각 선택할 수 있다.
 - 경로·HTTP method·라벨·함수명으로 검색하고 API/페이지/스크립트/수동 그룹으로 탐색한다.
 - 확정되지 않은 경로·handler·component는 원문 위치와 미해결 사유를 표시한다. 호출되지 않는 함수를 자동 진입점으로 만들지 않는다.
-- .covi/flow.json + 내장 스냅샷 index.html 생성, 파일 교체, partial/exit 2 계약을 유지한다.
+- .covi/flow.json + 같은 분석 스냅샷을 내장한 index.html 생성과 partial/exit 2 계약을 유지한다.
 - Vue 페이지 발견과 Vue 함수 블록 분석을 구분한다. .vue 페이지는 목록과 안전한 원문 보기까지 완료 기준이며 함수 내부 분석은 후속 범위다.
 
 ## 범위
@@ -90,7 +90,7 @@ type EntryPoint = {
 
 진입점 검색은 label/path/method/framework/command와 대상 함수명에 적용한다. endpoint는 controller/등록 파일, page는 경로, script는 package script/bin/명시 파일과 상대 파일 경로, manual은 groupPath로 그룹화한다. 내부 중첩 라우트 경로를 조합하며 index 및 pathless layout은 별도 라벨로 구분한다. unresolved 경로는 실제 URL처럼 보이지 않게 원문/부분 경로 배지를 붙인다.
 
-selectedEntryPointId, selectedTargetIndex, selectedFunctionId를 분리해 동일 함수의 여러 URL을 선택해도 선택 표시가 유지되게 한다. script module은 selectedModuleId로 선택하며 함수 선택과 상호 배타적으로 초기화한다. 진입점 선택 시 targets 목록을 보여 주고 첫 해석된 주 대상 함수로 연결한다. 함수와 module이 모두 없으면 등록 위치와 원문을 보여 주며 이전 함수 블록은 지운다. source-only 또는 미해결 대상끼리도 selectedTargetIndex로 구별하며 진입점 변경 시 대상 index를 초기화한다. JSON 교체 시 검색·선택·펼침 상태를 초기화한다. 전체 함수에는 기존 anonymous도 그대로 남긴다. 키보드/aria-pressed/포커스와 320px 화면을 확인한다.
+selectedEntryPointId, selectedTargetIndex, selectedFunctionId를 분리해 동일 함수의 여러 URL을 선택해도 선택 표시가 유지되게 한다. script module은 selectedModuleId로 선택하며 함수 선택과 상호 배타적으로 초기화한다. 진입점 선택 시 targets 목록을 보여 주고 첫 해석된 주 대상 함수로 연결한다. 함수와 module이 모두 없으면 등록 위치와 원문을 보여 주며 이전 함수 블록은 지운다. source-only 또는 미해결 대상끼리도 selectedTargetIndex로 구별하며 진입점 변경 시 대상 index를 초기화한다. index.html은 함께 생성된 flow.json과 동일한 내장 스냅샷을 자동 표시하며 별도 JSON 선택·드롭 UI를 제공하지 않는다. 전체 함수에는 기존 anonymous도 그대로 남긴다. 키보드/aria-pressed/포커스와 320px 화면을 확인한다.
 
 ## 설계 결정
 
@@ -123,7 +123,7 @@ selectedEntryPointId, selectedTargetIndex, selectedFunctionId를 분리해 동�
 | Task | 변경 대상(예정) | 작업 | 의존성 | 완료 검증 |
 |---|---|---|---|---|
 | E1 | src/model/flow.ts, src/analyzer/analyze.ts | entrypoints 계약/검증, roots→manual 변환 | 없음 | 기존 sample + 신규/깨진 참조 JSON assertion |
-| E2 | src/ui/main.tsx, styles.css | 모드/검색/그룹/다중 대상/미해결 원문 UI | E1 | 수동 entry·0건·동일 함수 복수 URL·JSON 교체·키보드/320px |
+| E2 | src/ui/main.tsx, styles.css | 모드/검색/그룹/다중 대상/미해결 원문 UI | E1 | 수동 entry·0건·동일 함수 복수 URL·내장 결과 자동 로드·키보드/320px |
 | S1 | src/cli/index.ts, src/model/flow.ts, src/analyzer/scripts.ts (신규 예정), analyze.ts, UI | package scripts/bin/--entry 탐지, modules·최상위 body·coverage·UI 연결 | E1–E2 | seed/bin/명시 파일, include 밖 입력, IIFE/await, 복수 별칭, 미지원 shell·경로 탈출·구형 JSON |
 | E3 | src/analyzer/entrypoints.ts, nestjs.ts (신규 예정) | 공통 정적 해석 최소 함수와 Nest 탐지 | E1 | Get/Post + alias + prefix 미해결 + 동명 decorator 오탐 없음 |
 | E4 | src/analyzer/express.ts (신규 예정) | app/Router/route/use/mount 및 targets | E3 공통 helper | 복수 mount·순환 mount·다중 handler·동적 경로 partial |

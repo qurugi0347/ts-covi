@@ -45,13 +45,13 @@ status: deferred
 
 ### 기존
 - Given: 함수 목록이 있는 v1 스냅샷
-- When: 검색·선택·JSON 교체
+- When: 검색·선택·내장 결과 자동 로드
 - Then: 함수 블록을 탐색
 
 ### 변경 후
 - Given: 진입점 포함/미포함 JSON, 같은 함수를 가리키는 두 URL, source-only 대상
-- When: 모드 전환·검색·entry 선택·target 선택·JSON 교체
-- Then: 진입점 ID 선택 유지, source-only에서 이전 블록 제거, 빈 상태 구분, 파일 교체 시 상태 초기화
+- When: 모드 전환·검색·entry 선택·target 선택·내장 결과 자동 로드
+- Then: 진입점 ID 선택 유지, source-only에서 이전 블록 제거, 빈 상태 구분
 
 ### 추가: standalone
 - Given: 악성 label/경로 문자열 및 partial 결과

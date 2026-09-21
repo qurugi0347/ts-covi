@@ -20,7 +20,7 @@ status: complete
 - [x] E1 entrypoints v1 optional 확장·검증·수동 roots 매핑
 - [x] E1 검증: 구형 JSON·깨진 참조·복수 target assertion
 - [x] E2 진입점/전체 함수 모드·그룹·검색·선택 분리
-- [x] E2 검증: 0건·복수 URL·JSON 교체·source-only·키보드/320px
+- [x] E2 검증: 0건·복수 URL·내장 결과 자동 로드·source-only·키보드/320px
 
 ## Phase 2 — 스크립트 (S1)
 
@@ -51,10 +51,11 @@ status: complete
 
 - [x] E7 pnpm test / pnpm typecheck / pnpm build 기존 검사 실행
 - [x] E7 compiled CLI → JSON → standalone HTML 원문 대조
-- [x] E7 구형 JSON 교체·악성 label 텍스트 처리·partial exit 2 유지
+- [x] E7 구형 JSON 내장 로드·악성 label 텍스트 처리·partial exit 2 유지
 - [x] E7 분석/로딩/메모리/출력 크기 전후 비교 및 미실행 검증 기록
 - [x] E7 README/HANDOFF 지원 경계 갱신
 - [x] E8 사용자 결과 확인 및 피드백 반영
+- [x] E8 JSON 선택·드롭 제거 및 같이 생성된 분석 결과 자동 표시
 - [x] E8 원본 작업 완료와 commit/PR 준비; 실제 Git 작업은 승인 범위에서만
 
 ## 후속 TestCode PR — 보류

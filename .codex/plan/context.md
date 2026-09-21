@@ -36,7 +36,7 @@ status: implemented
 
 NestJS/Express/API, React Router 페이지, Vue Router 페이지/원문까지 이번 계획에 포함. 사용자가 라우터를 지정하지 않아 React Router를 첫 구현 대상으로 제안한다. Next/TanStack/Nuxt 지원은 승인 시 범위 변경 가능하지만 자동 포함하지 않는다. Vue SFC 내부 분석은 별도 작업이다. 프레임워크 런타임을 부팅하지 않는다. 정적 목록은 실제 서버의 모든 배포 endpoint를 보장하지 않는다.
 
-소스코드·구형 JSON·파일 선택·CLI 저장과 partial 규칙을 유지한다. .vue 참조 파일을 추가 수집할 경우 기존 프로젝트 루트/ignore/realpath 경계를 적용한다. DB·API 서버·새 plugin framework·배포 설정은 필요 없다. 첫 단계에서 신규 runtime dependency는 계획하지 않는다.
+소스코드·구형 JSON 계약·CLI 저장과 partial 규칙을 유지한다. index.html은 함께 생성된 flow.json과 동일한 내장 스냅샷을 자동 표시하고 별도 파일 선택·드롭은 제공하지 않는다. .vue 참조 파일을 추가 수집할 경우 기존 프로젝트 루트/ignore/realpath 경계를 적용한다. DB·API 서버·새 plugin framework·배포 설정은 필요 없다. 첫 단계에서 신규 runtime dependency는 계획하지 않는다.
 
 ## 참고 근거
 
