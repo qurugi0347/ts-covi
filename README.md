@@ -97,5 +97,3 @@ async function createOrder(token: string, total: number) {
 | viewer 로딩 중앙값 | 60.8ms |
 
 자체 분석 결과는 170개 함수, supported 1,478개, unsupported 11개, 진단 46개로 partial이었다. `fixtures/order`는 순차 호출·검증 if/throw·reduce callback 경계·await 호출·저장·알림·return을 독립적으로 검증하며 complete 결과를 만든다.
-
-계획과 검증 근거는 [구조 개요](.codex/plan/architecture.html), [개발 계획](.codex/plan/plan.md), [작업 맥락](.codex/plan/context.md), [체크리스트](.codex/plan/checklist.md)에 있다.

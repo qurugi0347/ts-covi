@@ -20,7 +20,7 @@ package script와 bin은 진입점으로 만들지 않는다. 프레임워크 �
 - compiled CLI: partial exit 2, JSON/내장 HTML 생성, entrypoint·source span 대조 통과
 - 320px viewport, 키보드 focus, aria, 악성 HTML 문자열, invalid version 확인
 
-성능과 상세 환경은 README에 기록했다. 추가 회귀 테스트 확장은 `.codex/plan/test-code-plan.md`에 보류돼 있다.
+성능과 상세 환경은 README에 기록했다. 추가 회귀 테스트 확장은 별도 후속 작업으로 보류돼 있다.
 
 ## 핵심 경계
 
