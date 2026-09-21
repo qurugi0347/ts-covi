@@ -217,7 +217,13 @@ const detectExpress = (sourceFile: ts.SourceFile, fileId: string, imports: Map<s
   }));
 };
 
-type RouteOptions = { framework: "react-router" | "vue-router"; sourceFile: ts.SourceFile; fileId: string; imports: Map<string, ImportRef>; input: Input };
+type RouteOptions = { framework: "react-router" | "vue-router"; registrationKey: string; input: Input };
+
+const sourceContext = (sourceFile: ts.SourceFile, input: Input): { fileId: string; imports: Map<string, ImportRef> } | undefined => {
+  const relative = posix(path.relative(input.projectRoot, realpathSync(sourceFile.fileName)));
+  const fileId = input.fileIds.get(relative);
+  return fileId ? { fileId, imports: importsFor(sourceFile) } : undefined;
+};
 
 const routeEntries = (expression: ts.Expression, parentPath: string, options: RouteOptions, seen = new Set<ts.Expression>()): EntryPoint[] => {
   const resolved = resolveAlias(expression, options.input.checker);
@@ -228,6 +234,10 @@ const routeEntries = (expression: ts.Expression, parentPath: string, options: Ro
     if (!ts.isExpression(element)) return [];
     const route = resolveAlias(element, options.input.checker);
     if (!ts.isObjectLiteralExpression(route)) return [];
+    const sourceFile = route.getSourceFile();
+    const context = sourceContext(sourceFile, options.input);
+    if (!context) return [];
+    const { fileId, imports } = context;
     const rawPath = objectProperty(route, "path");
     const pathValue = rawPath ? staticStrings(rawPath, options.input.checker)?.[0] : undefined;
     const dynamicPath = Boolean(rawPath && pathValue === undefined);
@@ -237,30 +247,30 @@ const routeEntries = (expression: ts.Expression, parentPath: string, options: Ro
     const targets: EntryPointTarget[] = [];
     const component = objectProperty(route, "Component") ?? objectProperty(route, "component");
     if (component) {
-      const importedVue = options.framework === "vue-router" && ts.isIdentifier(component) && options.imports.get(component.text)?.module.endsWith(".vue") ? options.imports.get(component.text)!.module : undefined;
+      const importedVue = options.framework === "vue-router" && ts.isIdentifier(component) && imports.get(component.text)?.module.endsWith(".vue") ? imports.get(component.text)!.module : undefined;
       const lazyVue = options.framework === "vue-router" && ts.isArrowFunction(component) && ts.isCallExpression(component.body) && component.body.expression.kind === ts.SyntaxKind.ImportKeyword && component.body.arguments[0] && ts.isStringLiteral(component.body.arguments[0]) ? component.body.arguments[0].text : undefined;
       if (importedVue || lazyVue) {
-        const candidate = path.resolve(path.dirname(options.sourceFile.fileName), importedVue ?? lazyVue!);
+        const candidate = path.resolve(path.dirname(sourceFile.fileName), importedVue ?? lazyVue!);
         let absolute = candidate;
         try { absolute = realpathSync(candidate); } catch { /* keep the unresolved candidate */ }
         const source = options.input.vueSources.get(absolute);
         targets.push(source
-          ? { role: "component", source, expression: component.getText(options.sourceFile), status: "partial", reason: "Vue SFC 내부 함수 흐름은 분석하지 않습니다." }
-          : { role: "component", source: options.input.span(options.sourceFile, options.fileId, component), expression: component.getText(options.sourceFile), status: "partial", reason: "Vue component 원문을 안전하게 연결할 수 없습니다." });
-      } else targets.push(target("component", component, options.input, options.sourceFile, options.fileId));
+          ? { role: "component", source, expression: component.getText(sourceFile), status: "partial", reason: "Vue SFC 내부 함수 흐름은 분석하지 않습니다." }
+          : { role: "component", source: options.input.span(sourceFile, fileId, component), expression: component.getText(sourceFile), status: "partial", reason: "Vue component 원문을 안전하게 연결할 수 없습니다." });
+      } else targets.push(target("component", component, options.input, sourceFile, fileId));
     }
     const elementValue = objectProperty(route, "element");
     if (elementValue) {
       const tag = ts.isJsxElement(elementValue) ? elementValue.openingElement.tagName : ts.isJsxSelfClosingElement(elementValue) ? elementValue.tagName : undefined;
-      targets.push(tag && ts.isIdentifier(tag) ? target("component", tag, options.input, options.sourceFile, options.fileId) : { role: "component", source: options.input.span(options.sourceFile, options.fileId, elementValue), expression: elementValue.getText(options.sourceFile), status: "partial", reason: "element component를 정적으로 연결할 수 없습니다." });
+      targets.push(tag && ts.isIdentifier(tag) ? target("component", tag, options.input, sourceFile, fileId) : { role: "component", source: options.input.span(sourceFile, fileId, elementValue), expression: elementValue.getText(sourceFile), status: "partial", reason: "element component를 정적으로 연결할 수 없습니다." });
     }
     for (const role of ["loader", "action"] as const) {
       const value = objectProperty(route, role);
-      if (value) targets.push(target(role, value, options.input, options.sourceFile, options.fileId));
+      if (value) targets.push(target(role, value, options.input, sourceFile, fileId));
     }
-    if (!targets.length) targets.push({ role: "component", source: options.input.span(options.sourceFile, options.fileId, route), expression: route.getText(options.sourceFile), status: "partial", reason: "route target이 없거나 lazy target입니다." });
+    if (!targets.length) targets.push({ role: "component", source: options.input.span(sourceFile, fileId, route), expression: route.getText(sourceFile), status: "partial", reason: "route target이 없거나 lazy target입니다." });
     const reasons = dynamicPath ? ["동적 route path를 해석할 수 없습니다."] : [];
-    const entry = finalize({ id: `entry:${options.framework}:${options.fileId}:${route.getStart(options.sourceFile)}:${routeIndex}`, kind: "page", framework: options.framework, label: dynamicPath ? "동적 경로" : isIndex ? `${routePath} (index)` : rawPath ? routePath : `${routePath} (pathless)`, path: dynamicPath ? undefined : routePath, source: options.input.span(options.sourceFile, options.fileId, route), targets }, reasons);
+    const entry = finalize({ id: `entry:${options.framework}:${options.registrationKey}:${fileId}:${route.getStart(sourceFile)}:${routeIndex}`, kind: "page", framework: options.framework, label: dynamicPath ? "동적 경로" : isIndex ? `${routePath} (index)` : rawPath ? routePath : `${routePath} (pathless)`, path: dynamicPath ? undefined : routePath, source: options.input.span(sourceFile, fileId, route), targets }, reasons);
     const children = objectProperty(route, "children");
     return [entry, ...(children ? routeEntries(children, routePath, options, new Set(seen)) : [])];
   });
@@ -308,13 +318,13 @@ export const detectEntryPoints = (input: Input): EntryPoint[] => {
     const visit = (node: ts.Node): void => {
       if (ts.isCallExpression(node)) {
         if (importedCall(node.expression, imports, new Set(["react-router", "react-router-dom"]), new Set(["createBrowserRouter", "createHashRouter", "useRoutes"])) && node.arguments[0]) {
-          entries.push(...routeEntries(node.arguments[0], "", { framework: "react-router", sourceFile, fileId, imports, input }));
+          entries.push(...routeEntries(node.arguments[0], "", { framework: "react-router", registrationKey: `${fileId}:${node.getStart(sourceFile)}`, input }));
         }
         if (importedCall(node.expression, imports, new Set(["vue-router"]), new Set(["createRouter"])) && node.arguments[0]) {
           const options = resolveAlias(node.arguments[0], input.checker);
           if (ts.isObjectLiteralExpression(options)) {
             const routes = objectProperty(options, "routes");
-            if (routes) entries.push(...routeEntries(routes, "", { framework: "vue-router", sourceFile, fileId, imports, input }));
+            if (routes) entries.push(...routeEntries(routes, "", { framework: "vue-router", registrationKey: `${fileId}:${node.getStart(sourceFile)}`, input }));
           }
         }
       }
