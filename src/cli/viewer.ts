@@ -8,7 +8,7 @@ export const embedFlowDocument = (template: string, document: FlowDocument): str
   const marker = JSON.stringify(VIEWER_DATA_MARKER);
   if (!template.includes(marker)) throw new Error("Viewer template is missing the flow data marker.");
   const data = JSON.stringify(document).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
-  return template.replace(marker, data);
+  return template.replace(marker, () => data);
 };
 
 export const loadViewerTemplate = async (): Promise<string> => {
