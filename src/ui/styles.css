@@ -37,7 +37,7 @@ h1 { margin: .2rem 0; font-size: clamp(1.2rem, 2vw, 1.6rem); line-height: 1; }
 code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .canvas > header code { overflow-wrap: anywhere; color: #5b4ee8; }
 .node-list { display: grid; gap: .75rem; min-width: 0; }
-.flow-block { min-width: 0; border: 2px solid #7685f5; border-radius: .9rem; background: #f7f8ff; overflow: hidden; }
+.flow-block { min-width: 0; border: 1px solid #7685f5; border-radius: .9rem; background: #f7f8ff; overflow: hidden; }
 .flow-block.selected { box-shadow: 0 0 0 3px #c4b5fd; }
 .block-branch { border-color: #d97706; background: #fffaf0; }
 .block-loop { border-color: #15803d; background: #f2fbf5; }
@@ -56,9 +56,9 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .arguments li { display: grid; gap: .15rem; padding: .4rem .55rem; border-radius: .5rem; background: #e9e7ff; }
 .arguments span { color: #5b6475; font-size: .72rem; }
 .code-line { display: block; padding: 0 .8rem .8rem; overflow-wrap: anywhere; white-space: pre-wrap; }
-.nested-grid, .expanded-function { display: grid; gap: .7rem; margin: 0 .65rem .65rem; padding: .7rem; border-radius: .7rem; background: #ffffffb8; }
+.nested-grid, .expanded-function { display: grid; gap: .7rem; margin: 0 .5rem .5rem; padding: .4rem 0 .4rem .6rem; border-left: 2px solid #cbd5e1; background: #ffffffb8; }
 .nested-grid h4, .expanded-function h4 { margin: 0 0 .4rem; font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; }
-.loop-parts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.loop-parts { grid-template-columns: 1fr; }
 .loop-parts > section { min-width: 0; }
 .loop-parts code { display: block; margin-bottom: .5rem; overflow-wrap: anywhere; }
 .empty-nested { margin: 0; color: #64748b; font-size: .82rem; }
@@ -82,3 +82,8 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .arguments li { min-width: 0; overflow-wrap: anywhere; }
 
 .detail-button { min-height: 44px; padding: .45rem .65rem; border: 0; color: #4338ca; background: transparent; cursor: pointer; }
+
+.flow-summary { margin: 0 .8rem .7rem; color: #64748b; font-size: .78rem; overflow-wrap: anywhere; }
+.condition-button { min-height: 44px; padding: .3rem; border: 0; background: transparent; text-align: left; cursor: pointer; color: #92400e; overflow-wrap: anywhere; }
+.compact-guard .flow-block { border: 0; background: transparent; }
+.compact-guard .arguments { display: none; }

@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { type CallNode, type EntryPoint, type FlowDocument, type FlowFunction, type FlowNode, type SequenceNode, type SourceSpan } from "../model/flow.js";
 import { parseEmbeddedDocument } from "./embedded.js";
-import { emptyExpressionBranch, nestedNodes, presentSequence, type PresentedNode } from "./presentation.js";
+import { branchArms, compactExit, emptyExpressionBranch, flowSummary, nestedNodes, presentSequence, type PresentedNode } from "./presentation.js";
 import "./styles.css";
 
 const initialDocument = parseEmbeddedDocument(document.getElementById("ts-covi-data")?.textContent ?? undefined);
@@ -20,7 +20,7 @@ const findNode = (node: FlowNode, id: string): FlowNode | undefined => {
 const nodeSummary = (node: FlowNode, document: FlowDocument): string => {
   if (node.kind === "call") return node.annotation?.label ?? (node.targetFunctionId ? document.functions.find((fn) => fn.id === node.targetFunctionId)?.description : undefined) ?? node.displayExpression ?? node.calleeExpression;
   if (node.kind === "statement") return node.code;
-  if (node.kind === "branch") return `조건: ${node.condition}`;
+  if (node.kind === "branch") return `${node.origin === "expression" ? "조건부 평가" : "if"}: ${node.condition}`;
   if (node.kind === "loop") return `${node.loopKind}: ${node.condition ?? "반복"}`;
   if (node.kind === "return" || node.kind === "throw") return node.expression ? `${node.kind} ${node.expression}` : node.kind;
   if (node.kind === "unsupported") return `${node.syntax}: ${node.reason}`;
@@ -65,17 +65,23 @@ function FlowBlock({ node, statement, document, ancestors, expanded, selectedNod
   const childProps = { document, ancestors, expanded, selectedNodeId, onToggle, onSelect };
   const expressionOnly = emptyExpressionBranch(node);
   const title = statement && node.kind === "call" && !node.annotation?.label ? nodeSummary(statement, document) : nodeSummary(node, document);
-  const labels = node.kind === "branch" ? branchLabels(node.when) : undefined;
+  const structural = node.kind === "branch" || node.kind === "loop" || node.kind === "try";
+  const bodyKey = `body:${node.id}`;
+  const bodyOpen = expanded.has(bodyKey);
+  const compact = node.kind === "branch" && !expressionOnly && compactExit(node.then) && (!node.else || compactExit(node.else));
+  const bodyVisible = compact || bodyOpen;
+  const bodyRegion = `body-${node.id}`;
 
   return <article className={`flow-block block-${node.kind}${selectedNodeId === node.id || selectedNodeId === statement?.id ? " selected" : ""}`}>
     <header className="block-header">
       <button className="block-main" type="button" aria-pressed={selectedNodeId === node.id} onClick={() => onSelect(node.id)}>
-        <span className="kind">{statement?.kind ?? (expressionOnly ? "value" : node.kind)}</span><span className="block-title">{shortExpression(expressionOnly ? `조건부 값 평가: ${nodeSummary(node, document)}` : title)}</span>
+        <span className="kind">{statement?.kind ?? (expressionOnly ? "value" : node.kind)}</span><span className="block-title">{node.kind === "branch" ? (expressionOnly ? `조건부 값 평가: ${node.condition}` : title) : shortExpression(title)}</span>
       </button>
       {statement && <button className="detail-button" type="button" onClick={() => onSelect(statement.id)}>문장 원문</button>}
       {node.kind === "call" && node.awaited && <span className="badge">await</span>}
       {node.kind === "call" && node.args.length > 0 && <span className="badge">인자 {node.args.length}</span>}
       {node.kind === "call" && node.boundary && <span className="badge boundary">{node.boundary}</span>}
+      {structural && !expressionOnly && !compact && <button className="detail-button" type="button" aria-controls={bodyRegion} aria-expanded={bodyOpen} onClick={() => onToggle(bodyKey)}>{bodyOpen ? "본문 접기" : "본문 펼치기"}</button>}
       {recursive && <span className="badge recursive">재귀 경계</span>}
       {target && !recursive && <button className="expand" type="button" aria-controls={regionId} aria-expanded={isExpanded} aria-label={`${nodeSummary(node, document)} ${isExpanded ? "접기" : "펼치기"}`} onClick={() => onToggle(node.id)}>{isExpanded ? "−" : "+"}</button>}
     </header>
@@ -83,8 +89,9 @@ function FlowBlock({ node, statement, document, ancestors, expanded, selectedNod
     {node.kind === "call" && node.args.length > 0 && node.args.every((argument) => argument.expression.length <= 48 && !argument.expression.includes("\n")) && <ul className="arguments">{node.args.map((argument, index) => <li key={`${node.id}:arg:${index}`}><code>{argument.expression}</code>{argument.annotation && <span>{argument.annotation}</span>}</li>)}</ul>}
     {node.kind === "unsupported" && <code className="code-line">{node.code}</code>}
 
-    {node.kind === "branch" && !expressionOnly && <div className="nested-grid"><section><h4>{labels![0]}</h4><NodeList sequence={node.then} {...childProps} label={labels![0]} /></section>{node.else && <section><h4>{labels![1]}</h4><NodeList sequence={node.else} {...childProps} label={labels![1]} /></section>}</div>}
-    {node.kind === "loop" && <div className="nested-grid loop-parts">
+    {structural && !expressionOnly && !compact && <p className="flow-summary">{flowSummary(node, ancestors)}</p>}
+    {node.kind === "branch" && !expressionOnly && bodyVisible && <div className={`nested-grid${compact ? " compact-guard" : ""}`} id={bodyRegion}>{branchArms(node).map(({ node: arm, otherwise }, index) => <React.Fragment key={arm.id}><section><h4>{index === 0 ? branchLabels(arm.when)[0] : <button className="condition-button" type="button" onClick={() => onSelect(arm.id)}>else if {arm.condition}</button>}</h4><NodeList sequence={arm.then} {...childProps} label={branchLabels(arm.when)[0]} /></section>{otherwise && <section><h4>{branchLabels(arm.when)[1]}</h4><NodeList sequence={otherwise} {...childProps} label={branchLabels(arm.when)[1]} /></section>}</React.Fragment>)}</div>}
+    {node.kind === "loop" && bodyVisible && <div className="nested-grid loop-parts" id={bodyRegion}>
       {node.loopKind === "do" ? <>
         <section><h4>본문</h4><NodeList sequence={node.body} {...childProps} /></section>
         {node.condition && <section><h4>조건</h4><code>{node.condition}</code>{node.conditionFlow && <NodeList sequence={node.conditionFlow} {...childProps} />}</section>}
@@ -95,7 +102,7 @@ function FlowBlock({ node, statement, document, ancestors, expanded, selectedNod
         {node.incrementor && <section><h4>갱신</h4><code>{node.incrementor}</code>{node.incrementorFlow && <NodeList sequence={node.incrementorFlow} {...childProps} />}</section>}
       </>}
     </div>}
-    {node.kind === "try" && <div className="nested-grid"><section><h4>try</h4><NodeList sequence={node.body} {...childProps} /></section>{node.catch && <section><h4>catch {node.catch.variable}</h4><NodeList sequence={node.catch.body} {...childProps} /></section>}{node.finally && <section><h4>finally</h4><NodeList sequence={node.finally} {...childProps} /></section>}</div>}
+    {node.kind === "try" && bodyVisible && <div className="nested-grid" id={bodyRegion}><section><h4>try</h4><NodeList sequence={node.body} {...childProps} /></section>{node.catch && <section><h4>catch {node.catch.variable}</h4><NodeList sequence={node.catch.body} {...childProps} /></section>}{node.finally && <section><h4>finally</h4><NodeList sequence={node.finally} {...childProps} /></section>}</div>}
     {target && isExpanded && !recursive && <section className="expanded-function" id={regionId}><h4>{target.name}</h4><NodeList sequence={target.body} {...childProps} ancestors={[...ancestors, target.id]} /></section>}
   </article>;
 }
