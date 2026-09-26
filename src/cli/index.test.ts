@@ -13,7 +13,7 @@ test("resolves default and relative outputs from the project root while preservi
   await mkdir(projectRoot);
   await mkdir(launchDirectory);
   await writeFile(path.join(projectRoot, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true, target: "ES2023", module: "ESNext" }, include: ["main.ts"] }));
-  await writeFile(path.join(projectRoot, "main.ts"), "export function main() { return '</script><img src=x>'; }\n");
+  await writeFile(path.join(projectRoot, "main.ts"), "export function main() { return ['pattern$', '</script><img src=x>']; }\n");
 
   const previousDirectory = process.cwd();
   try {
@@ -33,6 +33,9 @@ test("resolves default and relative outputs from the project root while preservi
     assert.equal(viewer.includes("STATIC FLOW VIEWER"), true);
     assert.equal(viewer.includes('"name":"project"'), true);
     assert.equal(viewer.includes("</script><img"), false);
+    const embedded = viewer.match(/<script id="ts-covi-data" type="application\/json">([\s\S]*?)<\/script>/)?.[1];
+    assert.ok(embedded);
+    assert.deepEqual(JSON.parse(embedded), JSON.parse(await readFile(path.join(projectRoot, ".covi/relative.json"), "utf8")));
     await assert.rejects(readFile(path.join(launchDirectory, ".covi/relative.json"), "utf8"), { code: "ENOENT" });
   } finally {
     process.chdir(previousDirectory);

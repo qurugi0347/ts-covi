@@ -14,6 +14,7 @@ import {
   type SequenceNode,
   type SourceSpan,
 } from "../model/flow.js";
+import { detectEntryPoints } from "./entrypoints.js";
 
 const PRODUCER_VERSION = "0.1.0";
 
@@ -502,11 +503,11 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
   const projectRoot = realpathSync(path.dirname(absoluteConfig));
   const parsed = ts.parseJsonConfigFileContent(configResult.config, ts.sys, projectRoot, { noEmit: true }, absoluteConfig);
   if (parsed.errors.length) throw new Error(parsed.errors.map((entry) => ts.flattenDiagnosticMessageText(entry.messageText, "\n")).join("\n"));
+  const ignoreMatcher = createIgnore().add(readIgnorePatterns(projectRoot));
   const program = ts.createProgram({ rootNames: parsed.fileNames, options: parsed.options, projectReferences: parsed.projectReferences });
   const checker = program.getTypeChecker();
   const diagnostics: FlowDocument["diagnostics"] = [];
   if (parsed.projectReferences?.length) diagnostics.push({ severity: "warning", code: "PROJECT_REFERENCES_UNSUPPORTED", message: "Project references are not analyzed as separate projects." });
-  const ignoreMatcher = createIgnore().add(readIgnorePatterns(projectRoot));
   const excluded = excludedPaths.map((entry) => path.resolve(entry));
   let skipped = 0;
   const sourceFiles = program.getSourceFiles().filter((sourceFile) => {
@@ -518,11 +519,34 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     if (!include) skipped += 1;
     return include;
   });
-  const files = sourceFiles.map((sourceFile) => {
+  const vueFiles = new Map<string, { path: string; source: string }>();
+  for (const sourceFile of sourceFiles) {
+    const visit = (node: ts.Node): void => {
+      const specifier = ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) ? node.moduleSpecifier.text
+        : ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0] && ts.isStringLiteral(node.arguments[0]) ? node.arguments[0].text
+        : undefined;
+      if (specifier?.endsWith(".vue")) {
+        try {
+          const absolute = realpathSync(path.resolve(path.dirname(sourceFile.fileName), specifier));
+          const relative = posix(path.relative(projectRoot, absolute));
+          if (isWithin(projectRoot, absolute) && !ignoreMatcher.ignores(relative) && !excluded.includes(absolute)) vueFiles.set(absolute, { path: relative, source: readFileSync(absolute, "utf8") });
+        } catch {
+          // The route detector records unresolved Vue sources on the route declaration.
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+  }
+  const files = [...sourceFiles.map((sourceFile) => {
     const relativePath = posix(path.relative(projectRoot, realpathSync(sourceFile.fileName)));
     return { id: `file:${relativePath}`, path: relativePath, contentHash: createHash("sha256").update(sourceFile.text).digest("hex"), source: sourceFile.text };
-  });
+  }), ...[...vueFiles.values()].map((file) => ({ id: `file:${file.path}`, path: file.path, contentHash: createHash("sha256").update(file.source).digest("hex"), source: file.source }))];
   const fileIds = new Map(files.map((file) => [file.path, file.id]));
+  const vueSources = new Map([...vueFiles].map(([absolute, file]) => {
+    const lines = file.source.split(/\r?\n/);
+    return [absolute, { fileId: fileIds.get(file.path)!, start: 0, end: file.source.length, startLine: 1, startColumn: 1, endLine: lines.length, endColumn: (lines.at(-1)?.length ?? 0) + 1 } satisfies SourceSpan] as const;
+  }));
   for (const diagnostic of [...program.getOptionsDiagnostics(), ...program.getGlobalDiagnostics(), ...program.getSyntacticDiagnostics(), ...program.getSemanticDiagnostics()]) {
     const base = {
       severity: diagnostic.category === ts.DiagnosticCategory.Warning ? "warning" as const : "error" as const,
@@ -589,6 +613,21 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
       body,
     };
   });
+  const roots = indexed.filter((entry) => functionMetadata(entry.sourceFile, entry.declaration).root);
+  const entrypoints: FlowDocument["entrypoints"] = roots.map((entry) => {
+    const metadata = functionMetadata(entry.sourceFile, entry.declaration);
+    const name = functionName(entry.declaration);
+    return {
+      id: `entry:manual:${entry.id}`,
+      kind: "manual",
+      label: metadata.description ?? name,
+      source: sourceSpan(entry.sourceFile, entry.fileId, entry.declaration),
+      targets: [{ role: "handler", functionId: entry.id, expression: name, status: "complete" }],
+      status: "complete",
+      reasons: [],
+    };
+  });
+  entrypoints.push(...detectEntryPoints({ sourceFiles, checker, functionIds, fileIds, projectRoot, span: sourceSpan, vueSources, diagnostics }));
   const unresolved = diagnostics.some((entry) => entry.code !== "PROJECT_REFERENCES_UNSUPPORTED" || parsed.projectReferences?.length);
   const result: FlowDocument = {
     formatVersion: FORMAT_VERSION,
@@ -596,11 +635,12 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     project: { name: path.basename(projectRoot), tsconfig: posix(path.relative(projectRoot, absoluteConfig)) || "tsconfig.json" },
     files,
     functions,
-    roots: indexed.filter((entry) => functionMetadata(entry.sourceFile, entry.declaration).root).map((entry) => entry.id),
+    entrypoints,
+    roots: roots.map((entry) => entry.id),
     diagnostics,
     coverage: {
       status: unsupportedCount || unresolved ? "partial" : "complete",
-      files: { scanned: sourceFiles.length + skipped, analyzed: sourceFiles.length, skipped },
+      files: { scanned: files.length + skipped, analyzed: files.length, skipped },
       functions: { discovered: indexed.length, analyzed: functions.length },
       nodes: { supported, unsupported: unsupportedCount },
     },
