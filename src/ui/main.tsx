@@ -150,7 +150,7 @@ function App() {
   const [mode, setMode] = useState<"entrypoints" | "functions">(() => initialEntries.length ? "entrypoints" : "functions");
   const [selectedEntryPointId, setSelectedEntryPointId] = useState<string | undefined>(() => initialEntries[0]?.id);
   const [selectedTargetIndex, setSelectedTargetIndex] = useState(0);
-  const [selectedFunctionId, setSelectedFunctionId] = useState<string | undefined>(() => initialEntries[0]?.targets[0]?.functionId ?? initialDocument.flow?.roots[0] ?? initialDocument.flow?.functions[0]?.id);
+  const [selectedFunctionId, setSelectedFunctionId] = useState<string | undefined>(() => initialEntries.length ? initialEntries[0]?.targets[0]?.functionId : initialDocument.flow?.roots[0] ?? initialDocument.flow?.functions[0]?.id);
   const [selectedModuleId, setSelectedModuleId] = useState<string | undefined>(() => initialEntries[0]?.targets[0]?.moduleId);
   const [selectedNodeId, setSelectedNodeId] = useState<string>();
   const [query, setQuery] = useState("");
