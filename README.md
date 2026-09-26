@@ -61,6 +61,10 @@ ts-covi analyze --project ./tsconfig.json --out ./.covi/flow.json
 
 뷰어는 기본적으로 API·페이지·수동 진입점을 그룹별로 보여 주며, `전체 함수` 모드에서 기존 함수 목록을 그대로 탐색할 수 있다. endpoint의 middleware/handler와 페이지의 component/loader/action은 각각 별도 대상으로 표시한다. package script와 bin은 진입점으로 만들지 않는다.
 
+뷰어에서 긴 인자와 전체 시그니처는 오른쪽 상세에서 확인한다. AST로 확인된 단일 호출의 선언·반환·예외는 한 단계로 표시하고, 짧은 종료 분기는 `조건 → 종료`로 보여 준다. 긴 분기·반복·예외 본문은 요약 상태에서 시작하며 `본문 펼치기`로 확인한다. 접힌 요약에도 종료·await·외부/미해결 경계와 catch/finally가 남는다.
+
+내부 호출의 `함수 열기`는 중앙에서 해당 함수를 보여 준다. 이동 경로의 `돌아가기`를 누르면 이전 선택·펼침·스크롤 위치가 복원된다. `+`는 인라인 펼치기다. 재귀 호출은 경계로 표시한다. 새로운 문장 통합과 표현식 분기 표시는 다시 분석한 JSON에 적용되며, 이전 JSON도 기존 구조로 열 수 있다.
+
 함수 정의는 `functions`에 한 번 저장하고 호출은 ID로 참조한다. 주석 설명과 코드의 인자 표현식은 별도 필드다. 알 수 없는 구문과 호출은 원문·위치·진단을 남기며, 실제 분기 결과·인자 값·반복 횟수·Promise 완료 순서를 추측하지 않는다.
 
 런타임 route 등록, NestJS global prefix/version, 동적 Express mount, lazy route factory는 partial로 남긴다. Vue SFC는 페이지 원문만 연결하며 내부 함수 흐름은 분석하지 않는다. 실제 middleware 완료 순서, React 렌더링/effect, 비동기 callback 완료 시점은 추측하지 않는다.
