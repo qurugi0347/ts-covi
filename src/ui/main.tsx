@@ -1,11 +1,12 @@
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { type CallNode, type EntryPoint, type FlowDocument, type FlowNode, type SequenceNode, type SourceSpan } from "../model/flow.js";
+import { type CallNode, type EntryPoint, type FlowDocument, type FlowFunction, type FlowNode, type SequenceNode, type SourceSpan } from "../model/flow.js";
 import { parseEmbeddedDocument } from "./embedded.js";
 import "./styles.css";
 
 const initialDocument = parseEmbeddedDocument(document.getElementById("ts-covi-data")?.textContent ?? undefined);
 const FUNCTION_RESULT_LIMIT = 100;
+const shortExpression = (expression: string, limit = 100): string => expression.length > limit ? `${expression.slice(0, limit)}…` : expression;
 
 const nestedNodes = (node: FlowNode): FlowNode[] => node.kind === "sequence" ? node.children
   : node.kind === "branch" ? [node.then, ...(node.else ? [node.else] : [])]
@@ -72,15 +73,16 @@ function FlowBlock({ node, document, ancestors, expanded, selectedNodeId, onTogg
   return <article className={`flow-block block-${node.kind}${selectedNodeId === node.id ? " selected" : ""}`}>
     <header className="block-header">
       <button className="block-main" type="button" aria-pressed={selectedNodeId === node.id} onClick={() => onSelect(node.id)}>
-        <span className="kind">{node.kind}</span><span className="block-title">{nodeSummary(node, document)}</span>
+        <span className="kind">{node.kind}</span><span className="block-title">{shortExpression(nodeSummary(node, document))}</span>
       </button>
+      {node.kind === "call" && node.awaited && <span className="badge">await</span>}
+      {node.kind === "call" && node.args.length > 0 && <span className="badge">인자 {node.args.length}</span>}
       {node.kind === "call" && node.boundary && <span className="badge boundary">{node.boundary}</span>}
       {recursive && <span className="badge recursive">재귀 경계</span>}
       {target && !recursive && <button className="expand" type="button" aria-controls={regionId} aria-expanded={isExpanded} aria-label={`${nodeSummary(node, document)} ${isExpanded ? "접기" : "펼치기"}`} onClick={() => onToggle(node.id)}>{isExpanded ? "−" : "+"}</button>}
     </header>
 
-    {node.kind === "call" && node.args.length > 0 && <ul className="arguments">{node.args.map((argument, index) => <li key={`${node.id}:arg:${index}`}><code>{argument.expression}</code>{argument.annotation && <span>{argument.annotation}</span>}</li>)}</ul>}
-    {node.kind === "statement" && <code className="code-line">{node.code}</code>}
+    {node.kind === "call" && node.args.length > 0 && node.args.every((argument) => argument.expression.length <= 48 && !argument.expression.includes("\n")) && <ul className="arguments">{node.args.map((argument, index) => <li key={`${node.id}:arg:${index}`}><code>{argument.expression}</code>{argument.annotation && <span>{argument.annotation}</span>}</li>)}</ul>}
     {node.kind === "unsupported" && <code className="code-line">{node.code}</code>}
 
     {node.kind === "branch" && <div className="nested-grid"><section><h4>{labels![0]}</h4><NodeList sequence={node.then} {...childProps} label={labels![0]} /></section>{node.else && <section><h4>{labels![1]}</h4><NodeList sequence={node.else} {...childProps} label={labels![1]} /></section>}</div>}
@@ -100,11 +102,13 @@ function FlowBlock({ node, document, ancestors, expanded, selectedNodeId, onTogg
   </article>;
 }
 
-function Inspector({ document, node, source }: { document: FlowDocument; node?: FlowNode; source?: SourceSpan }) {
+function Inspector({ document, node, source, fn }: { document: FlowDocument; node?: FlowNode; source?: SourceSpan; fn?: FlowFunction }) {
+  const sourceCode = (span: SourceSpan) => document.files.find((entry) => entry.id === span.fileId)?.source.slice(span.start, span.end) ?? "원문을 찾을 수 없습니다.";
+  if (!node && fn) return <aside className="inspector"><h2>함수 상세</h2><h3>{fn.name}</h3>{fn.description && <p>{fn.description}</p>}<h4>입력 · 반환</h4><pre><code>{fn.signature}</code></pre><details><summary>함수 원문</summary><pre><code>{sourceCode(fn.source)}</code></pre></details>{source && <details><summary>진입점 원문</summary><pre><code>{sourceCode(source)}</code></pre></details>}</aside>;
   const selectedSource = node?.source ?? source;
   if (!selectedSource) return <aside className="inspector"><h2>원문</h2><p>블록이나 원문 대상을 선택하면 코드와 위치를 표시합니다.</p></aside>;
   const file = document.files.find((entry) => entry.id === selectedSource.fileId);
-  return <aside className="inspector"><h2>원문</h2><p className="source-location">{file?.path}:{selectedSource.startLine}:{selectedSource.startColumn}</p><pre><code>{file?.source.slice(selectedSource.start, selectedSource.end) ?? "원문을 찾을 수 없습니다."}</code></pre>{node?.kind === "call" && <dl><dt>호출식</dt><dd>{node.calleeExpression}</dd><dt>await</dt><dd>{node.awaited ? "예" : "아니요"}</dd>{node.annotation?.label && <><dt>설명</dt><dd>{node.annotation.label}</dd></>}</dl>}</aside>;
+  return <aside className="inspector"><h2>원문</h2><p className="source-location">{file?.path}:{selectedSource.startLine}:{selectedSource.startColumn}</p><pre><code>{sourceCode(selectedSource)}</code></pre>{node?.kind === "call" && <><dl><dt>호출식</dt><dd>{node.calleeExpression}</dd><dt>await</dt><dd>{node.awaited ? "예" : "아니요"}</dd>{node.annotation?.label && <><dt>설명</dt><dd>{node.annotation.label}</dd></>}</dl>{node.args.map((argument, index) => <section key={index}><h3>인자 {index + 1}</h3><pre><code>{argument.expression}</code></pre>{argument.annotation && <p>설명: {argument.annotation}</p>}</section>)}</>}</aside>;
 }
 
 const listedEntryPoints = (flow?: FlowDocument): EntryPoint[] => flow?.entrypoints ?? flow?.roots.flatMap((id) => {
@@ -193,8 +197,8 @@ function App() {
         {mode === "functions" && functions.length === 0 && <p className="empty-list">검색 결과가 없습니다.</p>}
         {mode === "functions" && functions.length > FUNCTION_RESULT_LIMIT && <p className="empty-list">일치하는 함수 {functions.length}개 중 {FUNCTION_RESULT_LIMIT}개를 표시합니다. 검색어로 범위를 좁혀 주세요.</p>}
       </aside>
-      <section className="canvas" aria-label="선택한 흐름">{selectedEntryPoint && <header className="entry-header"><span className="badge boundary">{entryGroup(selectedEntryPoint, flow)}</span><h2>{selectedEntryPoint.label}</h2>{selectedEntryPoint.command && <code>{selectedEntryPoint.command}</code>}{selectedEntryPoint.reasons.map((reason) => <p key={reason}>{reason}</p>)}{selectedEntryPoint.targets.length > 1 && <div className="target-list" aria-label="진입 대상">{selectedEntryPoint.targets.map((target, index) => <button key={`${target.role}:${index}`} type="button" className={index === selectedTargetIndex ? "active" : ""} aria-pressed={index === selectedTargetIndex} onClick={() => selectTarget(selectedEntryPoint, index)}>{target.role}: {target.expression}</button>)}</div>}</header>}{selectedFunction ? <><header><h2>{selectedFunction.description ?? selectedFunction.name}</h2><code>{selectedFunction.signature}</code></header><NodeList sequence={selectedFunction.body} document={flow} ancestors={[selectedFunction.id]} expanded={expanded} selectedNodeId={selectedNodeId} onToggle={toggle} onSelect={setSelectedNodeId} /></> : selectedModule ? <><header><h2>{selectedEntryPoint?.label ?? selectedModule.id}</h2><code>{selectedModule.id}</code></header><NodeList sequence={selectedModule.body} document={flow} ancestors={[]} expanded={expanded} selectedNodeId={selectedNodeId} onToggle={toggle} onSelect={setSelectedNodeId} /></> : selectedTarget ? <p>{selectedTarget.reason ?? "연결된 함수 본문 없이 원문만 확인할 수 있습니다."}</p> : <p>{mode === "entrypoints" ? "진입점을 선택하세요." : "함수를 선택하세요."}</p>}</section>
-      <Inspector document={flow} node={selectedNode} source={!selectedNode ? selectedTarget?.source ?? selectedEntryPoint?.source : undefined} />
+      <section className="canvas" aria-label="선택한 흐름">{selectedEntryPoint && <header className="entry-header"><span className="badge boundary">{entryGroup(selectedEntryPoint, flow)}</span><h2>{selectedEntryPoint.label}</h2>{selectedEntryPoint.command && <code>{selectedEntryPoint.command}</code>}{selectedEntryPoint.reasons.map((reason) => <p key={reason}>{reason}</p>)}{selectedEntryPoint.targets.length > 1 && <div className="target-list" aria-label="진입 대상">{selectedEntryPoint.targets.map((target, index) => <button key={`${target.role}:${index}`} type="button" className={index === selectedTargetIndex ? "active" : ""} aria-pressed={index === selectedTargetIndex} onClick={() => selectTarget(selectedEntryPoint, index)}>{target.role}: {target.expression}</button>)}</div>}</header>}{selectedFunction ? <><header><h2>{selectedFunction.description ?? selectedFunction.name}</h2><details className="signature"><summary>입력 · 반환</summary><code>{selectedFunction.signature}</code></details></header><NodeList sequence={selectedFunction.body} document={flow} ancestors={[selectedFunction.id]} expanded={expanded} selectedNodeId={selectedNodeId} onToggle={toggle} onSelect={setSelectedNodeId} /></> : selectedModule ? <><header><h2>{selectedEntryPoint?.label ?? selectedModule.id}</h2><code>{selectedModule.id}</code></header><NodeList sequence={selectedModule.body} document={flow} ancestors={[]} expanded={expanded} selectedNodeId={selectedNodeId} onToggle={toggle} onSelect={setSelectedNodeId} /></> : selectedTarget ? <p>{selectedTarget.reason ?? "연결된 함수 본문 없이 원문만 확인할 수 있습니다."}</p> : <p>{mode === "entrypoints" ? "진입점을 선택하세요." : "함수를 선택하세요."}</p>}</section>
+      <Inspector document={flow} node={selectedNode} fn={selectedFunction} source={!selectedNode ? selectedTarget?.source ?? selectedEntryPoint?.source : undefined} />
     </div>}
     {flow && <details className="diagnostics"><summary>진단 {flow.diagnostics.length}개</summary>{flow.diagnostics.length ? <ul>{flow.diagnostics.map((item, index) => <li key={`${item.code}:${index}`}><strong>{item.code}</strong> {item.message}</li>)}</ul> : <p>진단이 없습니다.</p>}</details>}
   </main>;
