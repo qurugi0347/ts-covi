@@ -87,3 +87,7 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .condition-button { min-height: 44px; padding: .3rem; border: 0; background: transparent; text-align: left; cursor: pointer; color: #92400e; overflow-wrap: anywhere; }
 .compact-guard .flow-block { border: 0; background: transparent; }
 .compact-guard .arguments { display: none; }
+
+.breadcrumbs { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-bottom: 1rem; font-size: .85rem; overflow-wrap: anywhere; }
+.breadcrumbs button { min-height: 44px; padding: .45rem .6rem; border: 1px solid #c7d0df; border-radius: .5rem; background: white; color: #4338ca; cursor: pointer; }
+.open-function { font-weight: 700; }
