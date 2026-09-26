@@ -2,17 +2,12 @@ import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { type CallNode, type EntryPoint, type FlowDocument, type FlowFunction, type FlowNode, type SequenceNode, type SourceSpan } from "../model/flow.js";
 import { parseEmbeddedDocument } from "./embedded.js";
+import { emptyExpressionBranch, nestedNodes, presentSequence, type PresentedNode } from "./presentation.js";
 import "./styles.css";
 
 const initialDocument = parseEmbeddedDocument(document.getElementById("ts-covi-data")?.textContent ?? undefined);
 const FUNCTION_RESULT_LIMIT = 100;
 const shortExpression = (expression: string, limit = 100): string => expression.length > limit ? `${expression.slice(0, limit)}…` : expression;
-
-const nestedNodes = (node: FlowNode): FlowNode[] => node.kind === "sequence" ? node.children
-  : node.kind === "branch" ? [node.then, ...(node.else ? [node.else] : [])]
-  : node.kind === "loop" ? [node.body, ...(node.initializerFlow ? [node.initializerFlow] : []), ...(node.conditionFlow ? [node.conditionFlow] : []), ...(node.incrementorFlow ? [node.incrementorFlow] : [])]
-  : node.kind === "try" ? [node.body, ...(node.catch ? [node.catch.body] : []), ...(node.finally ? [node.finally] : [])]
-  : [];
 
 const findNode = (node: FlowNode, id: string): FlowNode | undefined => {
   if (node.id === id) return node;
@@ -23,7 +18,7 @@ const findNode = (node: FlowNode, id: string): FlowNode | undefined => {
 };
 
 const nodeSummary = (node: FlowNode, document: FlowDocument): string => {
-  if (node.kind === "call") return node.annotation?.label ?? (node.targetFunctionId ? document.functions.find((fn) => fn.id === node.targetFunctionId)?.description : undefined) ?? node.calleeExpression;
+  if (node.kind === "call") return node.annotation?.label ?? (node.targetFunctionId ? document.functions.find((fn) => fn.id === node.targetFunctionId)?.description : undefined) ?? node.displayExpression ?? node.calleeExpression;
   if (node.kind === "statement") return node.code;
   if (node.kind === "branch") return `조건: ${node.condition}`;
   if (node.kind === "loop") return `${node.loopKind}: ${node.condition ?? "반복"}`;
@@ -54,27 +49,30 @@ type NodeListProps = {
 
 function NodeList(props: NodeListProps) {
   return <div className="node-list" aria-label={props.label}>{props.sequence.children.length
-    ? props.sequence.children.map((node) => <FlowBlock key={node.id} node={node} {...props} />)
+    ? presentSequence(props.sequence).map(({ node, statement }) => <FlowBlock key={node.id} node={node} statement={statement} {...props} />)
     : <p className="empty-nested">표시할 단계가 없습니다.</p>}
   </div>;
 }
 
-type FlowBlockProps = Omit<NodeListProps, "sequence"> & { node: FlowNode };
+type FlowBlockProps = Omit<NodeListProps, "sequence"> & PresentedNode;
 
-function FlowBlock({ node, document, ancestors, expanded, selectedNodeId, onToggle, onSelect }: FlowBlockProps) {
+function FlowBlock({ node, statement, document, ancestors, expanded, selectedNodeId, onToggle, onSelect }: FlowBlockProps) {
   if (node.kind === "sequence") return <NodeList sequence={node} document={document} ancestors={ancestors} expanded={expanded} selectedNodeId={selectedNodeId} onToggle={onToggle} onSelect={onSelect} />;
   const target = node.kind === "call" && node.targetFunctionId ? document.functions.find((fn) => fn.id === node.targetFunctionId) : undefined;
   const recursive = Boolean(target && ancestors.includes(target.id));
   const isExpanded = node.kind === "call" && expanded.has(node.id);
   const regionId = `expanded-${node.id.replace(/[^A-Za-z0-9_-]/g, "-")}`;
   const childProps = { document, ancestors, expanded, selectedNodeId, onToggle, onSelect };
+  const expressionOnly = emptyExpressionBranch(node);
+  const title = statement && node.kind === "call" && !node.annotation?.label ? nodeSummary(statement, document) : nodeSummary(node, document);
   const labels = node.kind === "branch" ? branchLabels(node.when) : undefined;
 
-  return <article className={`flow-block block-${node.kind}${selectedNodeId === node.id ? " selected" : ""}`}>
+  return <article className={`flow-block block-${node.kind}${selectedNodeId === node.id || selectedNodeId === statement?.id ? " selected" : ""}`}>
     <header className="block-header">
       <button className="block-main" type="button" aria-pressed={selectedNodeId === node.id} onClick={() => onSelect(node.id)}>
-        <span className="kind">{node.kind}</span><span className="block-title">{shortExpression(nodeSummary(node, document))}</span>
+        <span className="kind">{statement?.kind ?? (expressionOnly ? "value" : node.kind)}</span><span className="block-title">{shortExpression(expressionOnly ? `조건부 값 평가: ${nodeSummary(node, document)}` : title)}</span>
       </button>
+      {statement && <button className="detail-button" type="button" onClick={() => onSelect(statement.id)}>문장 원문</button>}
       {node.kind === "call" && node.awaited && <span className="badge">await</span>}
       {node.kind === "call" && node.args.length > 0 && <span className="badge">인자 {node.args.length}</span>}
       {node.kind === "call" && node.boundary && <span className="badge boundary">{node.boundary}</span>}
@@ -85,7 +83,7 @@ function FlowBlock({ node, document, ancestors, expanded, selectedNodeId, onTogg
     {node.kind === "call" && node.args.length > 0 && node.args.every((argument) => argument.expression.length <= 48 && !argument.expression.includes("\n")) && <ul className="arguments">{node.args.map((argument, index) => <li key={`${node.id}:arg:${index}`}><code>{argument.expression}</code>{argument.annotation && <span>{argument.annotation}</span>}</li>)}</ul>}
     {node.kind === "unsupported" && <code className="code-line">{node.code}</code>}
 
-    {node.kind === "branch" && <div className="nested-grid"><section><h4>{labels![0]}</h4><NodeList sequence={node.then} {...childProps} label={labels![0]} /></section>{node.else && <section><h4>{labels![1]}</h4><NodeList sequence={node.else} {...childProps} label={labels![1]} /></section>}</div>}
+    {node.kind === "branch" && !expressionOnly && <div className="nested-grid"><section><h4>{labels![0]}</h4><NodeList sequence={node.then} {...childProps} label={labels![0]} /></section>{node.else && <section><h4>{labels![1]}</h4><NodeList sequence={node.else} {...childProps} label={labels![1]} /></section>}</div>}
     {node.kind === "loop" && <div className="nested-grid loop-parts">
       {node.loopKind === "do" ? <>
         <section><h4>본문</h4><NodeList sequence={node.body} {...childProps} /></section>

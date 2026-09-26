@@ -26,10 +26,11 @@ export type CallAnnotation = {
 
 type BaseNode = { id: string; source: SourceSpan };
 export type SequenceNode = BaseNode & { kind: "sequence"; children: FlowNode[] };
-export type StatementNode = BaseNode & { kind: "statement"; code: string };
+export type StatementNode = BaseNode & { kind: "statement"; code: string; primaryCallId?: string };
 export type CallNode = BaseNode & {
   kind: "call";
   calleeExpression: string;
+  displayExpression?: string;
   args: CallArgument[];
   awaited: boolean;
   targetFunctionId?: string;
@@ -39,6 +40,7 @@ export type CallNode = BaseNode & {
 export type BranchNode = BaseNode & {
   kind: "branch";
   condition: string;
+  origin?: "statement" | "expression";
   when?: "truthy" | "falsy" | "nullish" | "non-nullish";
   then: SequenceNode;
   else?: SequenceNode;
@@ -61,6 +63,7 @@ export type JumpNode = BaseNode & {
 };
 export type ExitNode = BaseNode & {
   kind: "return" | "throw";
+  primaryCallId?: string;
   expression?: string;
 };
 export type TryNode = BaseNode & {
@@ -239,10 +242,27 @@ function node(
     array(entry, childPath).map((child, index) => node(child, `${childPath}[${index}]`, fileLengths, nodeIds, activeLoopIds, referencedFunctions));
 
   switch (kind) {
-    case "sequence":
-      return { id, kind, source, children: children(candidate.children, `${path}.children`) };
+    case "sequence": {
+      const entries = children(candidate.children, `${path}.children`);
+      entries.forEach((entry, index) => {
+        if (!(entry.kind === "statement" || entry.kind === "return" || entry.kind === "throw") || entry.primaryCallId === undefined) return;
+        const previous = entries[index - 1];
+        if (!previous || previous.kind !== "call" || previous.id !== entry.primaryCallId
+          || previous.source.fileId !== entry.source.fileId
+          || previous.source.start < entry.source.start || previous.source.end > entry.source.end) {
+          throw new FlowValidationError(`${path}.children[${index}].primaryCallId must reference the immediately preceding call inside its source`);
+        }
+        // A receiver/argument evaluation before this call prevents single-call grouping.
+        const evaluation = entries[index - 2];
+        if (evaluation && evaluation.source.fileId === entry.source.fileId
+          && evaluation.source.start >= entry.source.start && evaluation.source.end <= entry.source.end) {
+          throw new FlowValidationError(`${path}.children[${index}].primaryCallId contains additional evaluation`);
+        }
+      });
+      return { id, kind, source, children: entries };
+    }
     case "statement":
-      return { id, kind, source, code: string(candidate.code, `${path}.code`) };
+      return { id, kind, source, code: string(candidate.code, `${path}.code`), primaryCallId: optionalString(candidate.primaryCallId, `${path}.primaryCallId`) };
     case "call": {
       const targetFunctionId = optionalString(candidate.targetFunctionId, `${path}.targetFunctionId`);
       if (targetFunctionId) referencedFunctions.add(targetFunctionId);
@@ -276,6 +296,7 @@ function node(
         kind,
         source,
         calleeExpression: string(candidate.calleeExpression, `${path}.calleeExpression`),
+        displayExpression: optionalString(candidate.displayExpression, `${path}.displayExpression`),
         args,
         awaited: boolean(candidate.awaited, `${path}.awaited`),
         targetFunctionId,
@@ -293,6 +314,7 @@ function node(
         kind,
         source,
         condition: string(candidate.condition, `${path}.condition`),
+        origin: candidate.origin === undefined ? undefined : enumValue(candidate.origin, `${path}.origin`, ["statement", "expression"] as const),
         when,
         then: sequence(candidate.then, `${path}.then`),
         else: candidate.else === undefined ? undefined : sequence(candidate.else, `${path}.else`),
@@ -325,7 +347,7 @@ function node(
     }
     case "return":
     case "throw":
-      return { id, kind, source, expression: optionalString(candidate.expression, `${path}.expression`) };
+      return { id, kind, source, expression: optionalString(candidate.expression, `${path}.expression`), primaryCallId: optionalString(candidate.primaryCallId, `${path}.primaryCallId`) };
     case "try": {
       const catchValue = candidate.catch === undefined ? undefined : object(candidate.catch, `${path}.catch`);
       return {

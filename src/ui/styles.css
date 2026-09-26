@@ -80,3 +80,5 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .block-header { flex-wrap: wrap; }
 .block-main { flex-basis: 12rem; }
 .arguments li { min-width: 0; overflow-wrap: anywhere; }
+
+.detail-button { min-height: 44px; padding: .45rem .65rem; border: 0; color: #4338ca; background: transparent; cursor: pointer; }
