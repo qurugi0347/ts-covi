@@ -93,3 +93,4 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .open-function { font-weight: 700; }
 
 .functions button > span { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 700px) { .block-header .block-main { flex-basis: 100%; } }
