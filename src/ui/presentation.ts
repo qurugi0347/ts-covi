@@ -73,3 +73,12 @@ export const branchArms = (branch: BranchNode): { node: BranchNode; otherwise?: 
     }
   }
 };
+
+export const guardExitSummary = (sequence: SequenceNode): string => {
+  const group = presentSequence(sequence)[0]!;
+  if (group.node.kind === "call" && group.statement) return `${group.statement.kind} ${group.node.annotation?.label ?? group.node.displayExpression ?? `${group.node.calleeExpression}(…)`}`;
+  const node = group.node;
+  if (node.kind === "return" || node.kind === "throw") return `${node.kind} ${node.expression ?? ""}`.trim();
+  if (node.kind === "break" || node.kind === "continue") return `${node.kind} ${node.targetLabel ?? ""}`.trim();
+  return node.kind;
+};

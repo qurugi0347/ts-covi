@@ -91,3 +91,5 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .breadcrumbs { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-bottom: 1rem; font-size: .85rem; overflow-wrap: anywhere; }
 .breadcrumbs button { min-height: 44px; padding: .45rem .6rem; border: 1px solid #c7d0df; border-radius: .5rem; background: white; color: #4338ca; cursor: pointer; }
 .open-function { font-weight: 700; }
+
+.functions button > span { min-width: 0; overflow-wrap: anywhere; }

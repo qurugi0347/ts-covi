@@ -2,7 +2,7 @@ import React, { useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { type CallNode, type EntryPoint, type FlowDocument, type FlowFunction, type FlowNode, type SequenceNode, type SourceSpan } from "../model/flow.js";
 import { parseEmbeddedDocument } from "./embedded.js";
-import { branchArms, compactExit, emptyExpressionBranch, flowSummary, nestedNodes, presentSequence, type PresentedNode } from "./presentation.js";
+import { branchArms, compactExit, emptyExpressionBranch, flowSummary, guardExitSummary, nestedNodes, presentSequence, type PresentedNode } from "./presentation.js";
 import "./styles.css";
 
 const initialDocument = parseEmbeddedDocument(document.getElementById("ts-covi-data")?.textContent ?? undefined);
@@ -67,15 +67,16 @@ function FlowBlock({ node, statement, document, ancestors, expanded, selectedNod
   const regionId = `expanded-${callKey}`;
   const childProps = { document, ancestors, expanded, selectedNodeId, onToggle, onSelect, onOpen, path };
   const expressionOnly = emptyExpressionBranch(node);
-  const title = statement && node.kind === "call" && !node.annotation?.label ? nodeSummary(statement, document) : nodeSummary(node, document);
+  const baseTitle = statement && node.kind === "call" && !node.annotation?.label ? nodeSummary(statement, document) : nodeSummary(node, document);
   const structural = node.kind === "branch" || node.kind === "loop" || node.kind === "try";
   const bodyKey = `body:${callKey}`;
   const bodyOpen = expanded.has(bodyKey);
-  const compact = node.kind === "branch" && !expressionOnly && compactExit(node.then) && (!node.else || compactExit(node.else));
-  const bodyVisible = compact || bodyOpen;
+  const compact = node.kind === "branch" && node.origin === "statement" && !expressionOnly && compactExit(node.then) && (!node.else || compactExit(node.else));
+  const title = compact && node.kind === "branch" ? `${baseTitle} → ${shortExpression(guardExitSummary(node.then), 80)}${node.else ? `; else → ${shortExpression(guardExitSummary(node.else), 80)}` : ""}` : baseTitle;
+  const bodyVisible = bodyOpen;
   const bodyRegion = `body-${callKey}`;
 
-  return <article className={`flow-block block-${node.kind}${selectedNodeId === node.id || selectedNodeId === statement?.id ? " selected" : ""}`}>
+  return <article className={`flow-block block-${node.kind}${selectedNodeId === node.id || (statement && selectedNodeId === statement.id) ? " selected" : ""}`}>
     <header className="block-header">
       <button className="block-main" type="button" aria-pressed={selectedNodeId === node.id} onClick={() => onSelect(node.id)}>
         <span className="kind">{statement?.kind ?? (expressionOnly ? "value" : node.kind)}</span><span className="block-title">{node.kind === "branch" ? (expressionOnly ? `조건부 값 평가: ${node.condition}` : title) : shortExpression(title)}</span>
@@ -84,7 +85,7 @@ function FlowBlock({ node, statement, document, ancestors, expanded, selectedNod
       {node.kind === "call" && node.awaited && <span className="badge">await</span>}
       {node.kind === "call" && node.args.length > 0 && <span className="badge">인자 {node.args.length}</span>}
       {node.kind === "call" && node.boundary && <span className="badge boundary">{node.boundary}</span>}
-      {structural && !expressionOnly && !compact && <button className="detail-button" type="button" aria-controls={bodyRegion} aria-expanded={bodyOpen} onClick={() => onToggle(bodyKey)}>{bodyOpen ? "본문 접기" : "본문 펼치기"}</button>}
+      {structural && !expressionOnly && <button className="detail-button" type="button" aria-controls={bodyRegion} aria-expanded={bodyOpen} onClick={() => onToggle(bodyKey)}>{bodyOpen ? "본문 접기" : compact ? "상세 펼치기" : "본문 펼치기"}</button>}
       {recursive && <span className="badge recursive">재귀 경계</span>}
       {target && !recursive && node.kind === "call" && <button className="detail-button open-function" type="button" aria-label={`${nodeSummary(node, document)} 함수 열기`} onClick={() => onOpen(node, ancestors)}>함수 열기</button>}
       {target && !recursive && <button className="expand" type="button" aria-controls={regionId} aria-expanded={isExpanded} aria-label={`${nodeSummary(node, document)} ${isExpanded ? "접기" : "펼치기"}`} onClick={() => onToggle(callKey)}>{isExpanded ? "−" : "+"}</button>}
@@ -93,7 +94,7 @@ function FlowBlock({ node, statement, document, ancestors, expanded, selectedNod
     {node.kind === "call" && node.args.length > 0 && node.args.every((argument) => argument.expression.length <= 48 && !argument.expression.includes("\n")) && <ul className="arguments">{node.args.map((argument, index) => <li key={`${node.id}:arg:${index}`}><code>{argument.expression}</code>{argument.annotation && <span>{argument.annotation}</span>}</li>)}</ul>}
     {node.kind === "unsupported" && <code className="code-line">{node.code}</code>}
 
-    {structural && !expressionOnly && !compact && <p className="flow-summary">{flowSummary(node, ancestors)}</p>}
+    {structural && !expressionOnly && <p className="flow-summary">{flowSummary(node, ancestors)}</p>}
     {node.kind === "branch" && !expressionOnly && bodyVisible && <div className={`nested-grid${compact ? " compact-guard" : ""}`} id={bodyRegion}>{branchArms(node).map(({ node: arm, otherwise }, index) => <React.Fragment key={arm.id}><section><h4>{index === 0 ? branchLabels(arm.when)[0] : <button className="condition-button" type="button" onClick={() => onSelect(arm.id)}>else if {arm.condition}</button>}</h4><NodeList sequence={arm.then} {...childProps} label={branchLabels(arm.when)[0]} /></section>{otherwise && <section><h4>{branchLabels(arm.when)[1]}</h4><NodeList sequence={otherwise} {...childProps} label={branchLabels(arm.when)[1]} /></section>}</React.Fragment>)}</div>}
     {node.kind === "loop" && bodyVisible && <div className="nested-grid loop-parts" id={bodyRegion}>
       {node.loopKind === "do" ? <>
