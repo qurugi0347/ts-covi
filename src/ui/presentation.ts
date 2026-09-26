@@ -50,6 +50,11 @@ export const flowSummary = (node: FlowNode, ancestors: string[] = []): string =>
     }
     nestedNodes(entry).forEach(visit);
   };
+  if (node.kind === "try") {
+    if (node.catch) count("catch");
+    if (node.finally) count("finally");
+    if (node.finallyOverrides) count("finally 종료 덮어쓰기");
+  }
   nestedNodes(node).forEach(visit);
   return [`${steps}개 노드`, ...[...counts].map(([label, amount]) => `${label} ${amount}`)].join(" · ");
 };
