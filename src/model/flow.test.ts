@@ -80,3 +80,18 @@ test("rejects invalid branch conditions and jump targets", async () => {
   (jumpBody.children as Array<Record<string, unknown>>).push({ id: "bad-jump", kind: "break", source: (jumpBody.children as Array<Record<string, unknown>>)[0]!.source, targetId: "missing" });
   assert.throws(() => validateFlowDocument(jumpDocument), /unknown jump target/);
 });
+
+test("validates indexed class ownership and rejects a nearer nested class", async () => {
+  const document = validateFlowDocument(await loadSample());
+  const fn = document.functions[0]!;
+  fn.classId = "class:outer";
+  const method = { name: fn.name, source: fn.source, signature: fn.signature, visibility: "public" as const, static: false, kind: "method" as const, functionId: fn.id };
+  const owner = { id: fn.classId, name: "Outer", source: fn.source, constructor: undefined, implements: [], fields: [], methods: [method] };
+  document.classes = [owner];
+  assert.equal(validateFlowDocument(document).classes?.[0]?.methods[0]?.functionId, fn.id);
+  document.classes.push({ ...owner, id: "class:inner", name: "Inner", source: { ...fn.source, start: fn.source.start + 1 }, methods: [] });
+  // Move the function and its method inside Inner while retaining the incorrect Outer link.
+  fn.source = { ...fn.source, start: fn.source.start + 1 };
+  method.source = fn.source;
+  assert.throws(() => validateFlowDocument(document), /belongs to a nested class/);
+});

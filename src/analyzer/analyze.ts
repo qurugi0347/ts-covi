@@ -9,6 +9,8 @@ import {
   type BoundaryKind,
   type CallNode,
   type FlowDocument,
+  type FlowClass,
+  type ClassVisibility,
   type FlowFunction,
   type FlowNode,
   type SequenceNode,
@@ -88,20 +90,39 @@ const supportedFunction = (node: ts.Node): node is ts.FunctionLikeDeclaration =>
 
 const functionName = (node: ts.FunctionLikeDeclaration): string => {
   if (node.name) return node.name.getText(node.getSourceFile());
-  const parent = node.parent;
+  let parent: ts.Node = node.parent;
+  while (ts.isParenthesizedExpression(parent) || ts.isAsExpression(parent) || ts.isTypeAssertionExpression(parent) || ts.isNonNullExpression(parent) || ts.isSatisfiesExpression(parent)) parent = parent.parent;
   if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) return parent.name.text;
-  if (ts.isPropertyAssignment(parent)) return parent.name.getText();
+  if (ts.isPropertyAssignment(parent) || ts.isPropertyDeclaration(parent)) return parent.name.getText();
   return `<anonymous@${node.getStart()}>`;
 };
 
+const unwrapClassInitializer = (node: ts.Expression): ts.Expression => {
+  while (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node)) node = node.expression;
+  return node;
+};
+const functionOwner = (node: ts.FunctionLikeDeclaration): ts.ClassLikeDeclaration | undefined => {
+  if (ts.isMethodDeclaration(node) && (ts.isClassDeclaration(node.parent) || ts.isClassExpression(node.parent))) return node.parent;
+  let parent: ts.Node = node.parent;
+  while (ts.isParenthesizedExpression(parent) || ts.isAsExpression(parent) || ts.isTypeAssertionExpression(parent) || ts.isNonNullExpression(parent) || ts.isSatisfiesExpression(parent)) parent = parent.parent;
+  if (!ts.isPropertyDeclaration(parent) || !parent.initializer || unwrapClassInitializer(parent.initializer) !== node) return undefined;
+  return ts.isClassDeclaration(parent.parent) || ts.isClassExpression(parent.parent) ? parent.parent : undefined;
+};
+const className = (node: ts.ClassLikeDeclaration): string => node.name?.text ?? `<anonymous class@${node.getStart()}>`;
+
 const functionBody = (node: ts.FunctionLikeDeclaration): ts.ConciseBody | undefined => node.body;
 
-const functionMetadata = (sourceFile: ts.SourceFile, node: ts.FunctionLikeDeclaration): { description?: string; groupPath?: string[]; root: boolean } => {
+const functionMetadata = (sourceFile: ts.SourceFile, node: ts.Node): { description?: string; groupPath?: string[]; root: boolean } => {
   let owner: ts.Node = node;
   if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && ts.isVariableDeclaration(node.parent)) {
     owner = node.parent.parent.parent;
   } else if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && ts.isPropertyAssignment(node.parent)) {
     owner = node.parent;
+  }
+  if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
+    let member: ts.Node = node.parent;
+    while (ts.isParenthesizedExpression(member) || ts.isAsExpression(member) || ts.isTypeAssertionExpression(member) || ts.isNonNullExpression(member) || ts.isSatisfiesExpression(member)) member = member.parent;
+    if (ts.isPropertyDeclaration(member) && functionOwner(node)) owner = member;
   }
   const trivia = sourceFile.text.slice(owner.getFullStart(), owner.getStart(sourceFile));
   const match = trivia.match(/\/\*\*([\s\S]*?)\*\/\s*$/);
@@ -162,6 +183,54 @@ const recordBoundaryDiagnostic = (context: AnalyzeContext, call: CallNode): void
   context.diagnostics.push({ severity: "warning", code: call.boundary === "runtime" ? "RUNTIME_BINDING" : "UNRESOLVED_CALL", message: `Cannot statically resolve ${call.calleeExpression}`, source: call.source });
 };
 
+// Only receivers containing calls need a shorter display label; original expressions stay intact.
+const callDisplayExpression = (expression: ts.Expression, optionalCall: boolean): string | undefined => {
+  let shortened = false;
+  const render = (current: ts.Expression): string => {
+    if (ts.isParenthesizedExpression(current)) return `(${render(current.expression)})`;
+    if (ts.isCallExpression(current)) {
+      shortened = true;
+      return `${render(current.expression)}${current.questionDotToken ? "?." : ""}(…)`;
+    }
+    if (ts.isPropertyAccessExpression(current)) return `${render(current.expression)}${current.questionDotToken ? "?." : "."}${current.name.getText()}`;
+    if (ts.isElementAccessExpression(current)) return `${render(current.expression)}${current.questionDotToken ? "?." : ""}[${current.argumentExpression.getText()}]`;
+    return current.getText();
+  };
+  const label = render(expression);
+  return shortened ? `${label}${optionalCall ? "?." : ""}(…)` : undefined;
+};
+
+const primaryCallId = (expression: ts.Expression | undefined, evaluations: FlowNode[]): string | undefined => {
+  if (!expression || evaluations.length !== 1 || evaluations[0]?.kind !== "call") return undefined;
+  while (ts.isParenthesizedExpression(expression)) expression = expression.expression;
+  if (ts.isAwaitExpression(expression)) {
+    expression = expression.expression;
+    while (ts.isParenthesizedExpression(expression)) expression = expression.expression;
+  }
+  return (ts.isCallExpression(expression) || ts.isNewExpression(expression))
+    && evaluations[0].source.start === expression.getStart()
+    && evaluations[0].source.end === expression.getEnd() ? evaluations[0].id : undefined;
+};
+
+const callMetadata = (context: AnalyzeContext, expression: ts.CallExpression | ts.NewExpression): Pick<CallNode, "args" | "signature"> => {
+  const signature = context.checker.getResolvedSignature(expression);
+  let spreadSeen = false;
+  return {
+    signature: signature ? context.checker.signatureToString(signature, expression, ts.TypeFormatFlags.NoTruncation) : undefined,
+    args: (expression.arguments ?? []).map((argument, index) => {
+      spreadSeen ||= ts.isSpreadElement(argument);
+      const parameter = spreadSeen ? undefined : signature?.parameters[index];
+      const description = parameter ? ts.displayPartsToString(parameter.getDocumentationComment(context.checker)).trim() : undefined;
+      return {
+        expression: argument.getText(context.sourceFile),
+        type: context.checker.typeToString(context.checker.getTypeAtLocation(argument), argument, ts.TypeFormatFlags.NoTruncation),
+        parameterName: parameter?.getName(),
+        description: description || undefined,
+      };
+    }),
+  };
+};
+
 const createCallNode = (context: AnalyzeContext, expression: ts.CallExpression, awaited: boolean): CallNode => {
   const resolution = resolveCall(context, expression);
   const call: CallNode = {
@@ -169,7 +238,9 @@ const createCallNode = (context: AnalyzeContext, expression: ts.CallExpression, 
     kind: "call",
     source: sourceSpan(context.sourceFile, context.fileId, expression),
     calleeExpression: expression.expression.getText(context.sourceFile),
-    args: expression.arguments.map((argument) => ({ expression: argument.getText(context.sourceFile) })),
+    displayExpression: callDisplayExpression(expression.expression, Boolean(expression.questionDotToken)),
+    ...callMetadata(context, expression),
+    returnType: context.checker.typeToString(context.checker.getTypeAtLocation(expression), expression, ts.TypeFormatFlags.NoTruncation),
     awaited,
     ...resolution,
   };
@@ -280,7 +351,7 @@ const expressionNodes = (context: AnalyzeContext, expression: ts.Expression, awa
       conditional.push(createCallNode(context, expression, awaited));
       const then = sequence(context, expression, conditional);
       context.supported += 1;
-      return [...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: optional.base.getText(context.sourceFile), when: "non-nullish", then }];
+      return [...before, { id: context.nextNodeId(), kind: "branch", origin: "expression", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: optional.base.getText(context.sourceFile), when: "non-nullish", then }];
     }
     const children = expressionNodes(context, expression.expression);
     for (const argument of expression.arguments) {
@@ -296,7 +367,8 @@ const expressionNodes = (context: AnalyzeContext, expression: ts.Expression, awa
       kind: "call",
       source: sourceSpan(context.sourceFile, context.fileId, expression),
       calleeExpression: `new ${expression.expression.getText(context.sourceFile)}`,
-      args: expression.arguments?.map((argument) => ({ expression: argument.getText(context.sourceFile) })) ?? [],
+      ...callMetadata(context, expression),
+      returnType: context.checker.typeToString(context.checker.getTypeAtLocation(expression), expression, ts.TypeFormatFlags.NoTruncation),
       awaited: false,
       ...resolveCall(context, expression),
     };
@@ -313,7 +385,7 @@ const expressionNodes = (context: AnalyzeContext, expression: ts.Expression, awa
         : expression.operatorToken.kind === ts.SyntaxKind.BarBarToken ? "falsy"
         : "nullish";
       context.supported += 1;
-      return [...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: expression.left.getText(context.sourceFile), when, then }];
+      return [...before, { id: context.nextNodeId(), kind: "branch", origin: "expression", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: expression.left.getText(context.sourceFile), when, then }];
     }
     return [...expressionNodes(context, expression.left), ...expressionNodes(context, expression.right)];
   }
@@ -322,7 +394,7 @@ const expressionNodes = (context: AnalyzeContext, expression: ts.Expression, awa
     const then = sequence(context, expression.whenTrue, expressionNodes(context, expression.whenTrue));
     const otherwise = sequence(context, expression.whenFalse, expressionNodes(context, expression.whenFalse));
     context.supported += 1;
-    return [...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: expression.condition.getText(context.sourceFile), when: "truthy", then, else: otherwise }];
+    return [...before, { id: context.nextNodeId(), kind: "branch", origin: "expression", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: expression.condition.getText(context.sourceFile), when: "truthy", then, else: otherwise }];
   }
   if (ts.isPrefixUnaryExpression(expression) || ts.isPostfixUnaryExpression(expression)) return expressionNodes(context, expression.operand);
   if (ts.isTypeOfExpression(expression) || ts.isVoidExpression(expression) || ts.isDeleteExpression(expression)) return expressionNodes(context, expression.expression);
@@ -333,7 +405,7 @@ const expressionNodes = (context: AnalyzeContext, expression: ts.Expression, awa
       if (optional.boundaries > 1) return [...before, unsupported(context, expression, "Multiple optional chain boundaries are preserved as an opaque expression.")];
       const then = sequence(context, expression, afterBase(expression, optional.base));
       context.supported += 1;
-      return [...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: optional.base.getText(context.sourceFile), when: "non-nullish", then }];
+      return [...before, { id: context.nextNodeId(), kind: "branch", origin: "expression", source: sourceSpan(context.sourceFile, context.fileId, expression), condition: optional.base.getText(context.sourceFile), when: "non-nullish", then }];
     }
     if (ts.isPropertyAccessExpression(expression)) return expressionNodes(context, expression.expression);
     return [...expressionNodes(context, expression.expression), ...expressionNodes(context, expression.argumentExpression)];
@@ -429,7 +501,7 @@ const statementNodes = (context: AnalyzeContext, statement: ts.Statement, label?
   if (ts.isVariableStatement(statement)) {
     const calls = statement.declarationList.declarations.flatMap((declaration) => declaration.initializer ? expressionNodes(context, declaration.initializer) : []);
     context.supported += 1;
-    return finish([...calls, { id: context.nextNodeId(), kind: "statement", source: sourceSpan(context.sourceFile, context.fileId, statement), code: statement.getText(context.sourceFile) }], false);
+    return finish([...calls, { id: context.nextNodeId(), kind: "statement", source: sourceSpan(context.sourceFile, context.fileId, statement), code: statement.getText(context.sourceFile), primaryCallId: statement.declarationList.declarations.length === 1 ? primaryCallId(statement.declarationList.declarations[0]?.initializer, calls) : undefined }], false);
   }
   if (ts.isExpressionStatement(statement)) {
     const calls = expressionNodes(context, statement.expression);
@@ -441,19 +513,19 @@ const statementNodes = (context: AnalyzeContext, statement: ts.Statement, label?
   if (ts.isReturnStatement(statement)) {
     const calls = statement.expression ? expressionNodes(context, statement.expression) : [];
     context.supported += 1;
-    return finish([...calls, { id: context.nextNodeId(), kind: "return", source: sourceSpan(context.sourceFile, context.fileId, statement), expression: statement.expression?.getText(context.sourceFile) }], true);
+    return finish([...calls, { id: context.nextNodeId(), kind: "return", source: sourceSpan(context.sourceFile, context.fileId, statement), expression: statement.expression?.getText(context.sourceFile), primaryCallId: primaryCallId(statement.expression, calls) }], true);
   }
   if (ts.isThrowStatement(statement)) {
     const calls = expressionNodes(context, statement.expression);
     context.supported += 1;
-    return finish([...calls, { id: context.nextNodeId(), kind: "throw", source: sourceSpan(context.sourceFile, context.fileId, statement), expression: statement.expression.getText(context.sourceFile) }], true);
+    return finish([...calls, { id: context.nextNodeId(), kind: "throw", source: sourceSpan(context.sourceFile, context.fileId, statement), expression: statement.expression.getText(context.sourceFile), primaryCallId: primaryCallId(statement.expression, calls) }], true);
   }
   if (ts.isIfStatement(statement)) {
     const before = expressionNodes(context, statement.expression);
     const then = asBlock(context, statement.thenStatement);
     const otherwise = statement.elseStatement ? asBlock(context, statement.elseStatement) : undefined;
     context.supported += 1;
-    return finish([...before, { id: context.nextNodeId(), kind: "branch", source: sourceSpan(context.sourceFile, context.fileId, statement), condition: statement.expression.getText(context.sourceFile), when: "truthy", then: then.sequence, else: otherwise?.sequence }], then.terminates && Boolean(otherwise?.terminates));
+    return finish([{ id: context.nextNodeId(), kind: "branch", origin: "statement", conditionFlow: before.length ? sequence(context, statement.expression, before) : undefined, source: sourceSpan(context.sourceFile, context.fileId, statement), condition: statement.expression.getText(context.sourceFile), when: "truthy", then: then.sequence, else: otherwise?.sequence }], then.terminates && Boolean(otherwise?.terminates));
   }
   if (ts.isIterationStatement(statement, false)) return finish([loopParts(context, statement, label)], false);
   if (ts.isBreakStatement(statement) || ts.isContinueStatement(statement)) {
@@ -489,7 +561,8 @@ const statementNodes = (context: AnalyzeContext, statement: ts.Statement, label?
 
 const analyzeBody = (context: AnalyzeContext, body: ts.ConciseBody): SequenceNode => {
   if (!ts.isBlock(body)) {
-    const nodes = [...expressionNodes(context, body), { id: context.nextNodeId(), kind: "return" as const, source: sourceSpan(context.sourceFile, context.fileId, body), expression: body.getText(context.sourceFile) }];
+    const calls = expressionNodes(context, body);
+    const nodes = [...calls, { id: context.nextNodeId(), kind: "return" as const, source: sourceSpan(context.sourceFile, context.fileId, body), expression: body.getText(context.sourceFile), primaryCallId: primaryCallId(body, calls) }];
     context.supported += 1;
     return sequence(context, body, nodes);
   }
@@ -583,6 +656,57 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     visit(sourceFile);
   }
   const functionIds = new Map<ts.Node, string>(indexed.map((entry) => [entry.declaration, entry.id]));
+  const classIds = new Map<ts.ClassLikeDeclaration, string>();
+  const classes: FlowClass[] = [];
+  const hasModifier = (node: ts.Node, kind: ts.SyntaxKind): boolean => ts.canHaveModifiers(node) && Boolean(ts.getModifiers(node)?.some((modifier) => modifier.kind === kind));
+  const visibility = (node: ts.NamedDeclaration): ClassVisibility => node.name && ts.isPrivateIdentifier(node.name) || hasModifier(node, ts.SyntaxKind.PrivateKeyword) ? "private" : hasModifier(node, ts.SyntaxKind.ProtectedKeyword) ? "protected" : "public";
+  const typeText = (node: ts.Node): string => checker.typeToString(checker.getTypeAtLocation(node), node, ts.TypeFormatFlags.NoTruncation);
+  const signatureText = (node: ts.SignatureDeclaration): string => {
+    const signature = checker.getSignatureFromDeclaration(node);
+    return signature ? checker.signatureToString(signature, node, ts.TypeFormatFlags.NoTruncation) : node.getText(node.getSourceFile()).split("{")[0]!.trim();
+  };
+  for (const sourceFile of sourceFiles) {
+    const fileId = fileIds.get(posix(path.relative(projectRoot, realpathSync(sourceFile.fileName))))!;
+    const visit = (node: ts.Node): void => {
+      if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) {
+        const id = `class:${fileId}:${node.getStart(sourceFile)}`;
+        classIds.set(node, id);
+        const span = (member: ts.Node) => sourceSpan(sourceFile, fileId, member);
+        const description = (member: ts.Node) => functionMetadata(sourceFile, member).description;
+        const constructorDeclarations = node.members.filter(ts.isConstructorDeclaration);
+        const constructorNode = constructorDeclarations.find((member) => member.body) ?? constructorDeclarations[0];
+        const fields: FlowClass["fields"] = [];
+        const methods: FlowClass["methods"] = [];
+        const methodKeys = new Set<string>();
+        for (const member of node.members) {
+          if (ts.isPropertyDeclaration(member)) {
+            const initializer = member.initializer && unwrapClassInitializer(member.initializer);
+            if (initializer && (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer))) {
+              methods.push({ name: member.name.getText(sourceFile), source: span(member), signature: signatureText(initializer), description: description(member), visibility: visibility(member), static: hasModifier(member, ts.SyntaxKind.StaticKeyword), kind: "property-function", functionId: functionIds.get(initializer) });
+            } else fields.push({ name: member.name.getText(sourceFile), type: typeText(member), source: span(member), description: description(member), visibility: visibility(member), static: hasModifier(member, ts.SyntaxKind.StaticKeyword), readonly: hasModifier(member, ts.SyntaxKind.ReadonlyKeyword), optional: Boolean(member.questionToken) });
+          } else if (ts.isMethodDeclaration(member) || ts.isGetAccessorDeclaration(member) || ts.isSetAccessorDeclaration(member)) {
+            const kind = ts.isGetAccessorDeclaration(member) ? "get" : ts.isSetAccessorDeclaration(member) ? "set" : "method";
+            const key = `${kind}:${hasModifier(member, ts.SyntaxKind.StaticKeyword)}:${member.name.getText(sourceFile)}`;
+            if (methodKeys.has(key)) continue;
+            if (ts.isMethodDeclaration(member) && !member.body && node.members.some((other) => ts.isMethodDeclaration(other) && other.body && other.name.getText(sourceFile) === member.name.getText(sourceFile) && hasModifier(other, ts.SyntaxKind.StaticKeyword) === hasModifier(member, ts.SyntaxKind.StaticKeyword))) continue;
+            methodKeys.add(key);
+            methods.push({ name: member.name.getText(sourceFile), source: span(member), signature: signatureText(member), description: description(member), visibility: visibility(member), static: hasModifier(member, ts.SyntaxKind.StaticKeyword), kind, functionId: kind === "method" ? functionIds.get(member) : undefined });
+          }
+        }
+        const constructor = constructorNode ? { source: span(constructorNode), signature: signatureText(constructorNode), parameters: constructorNode.parameters.map((parameter) => {
+          const parameterProperty = hasModifier(parameter, ts.SyntaxKind.PublicKeyword) || hasModifier(parameter, ts.SyntaxKind.ProtectedKeyword) || hasModifier(parameter, ts.SyntaxKind.PrivateKeyword) || hasModifier(parameter, ts.SyntaxKind.ReadonlyKeyword);
+          const symbol = checker.getSymbolAtLocation(parameter.name);
+          const doc = symbol && ts.displayPartsToString(symbol.getDocumentationComment(checker)).trim();
+          const result = { name: parameter.name.getText(sourceFile), type: typeText(parameter), source: span(parameter), description: doc || description(parameter), optional: Boolean(parameter.questionToken || parameter.initializer), rest: Boolean(parameter.dotDotDotToken), visibility: parameterProperty ? visibility(parameter) : undefined, readonly: parameterProperty ? hasModifier(parameter, ts.SyntaxKind.ReadonlyKeyword) : undefined };
+          if (parameterProperty) fields.push({ ...result, visibility: visibility(parameter), readonly: Boolean(result.readonly), static: false });
+          return result;
+        }) } : undefined;
+        classes.push({ id, name: className(node), source: span(node), description: description(node), extends: node.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types.map((type) => type.getText(sourceFile)).join(", "), implements: node.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ImplementsKeyword)?.types.map((type) => type.getText(sourceFile)) ?? [], fields, constructor, methods });
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+  }
   let supported = 0;
   let unsupportedCount = 0;
   const functions: FlowFunction[] = indexed.map((entry) => {
@@ -606,7 +730,9 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     return {
       id: entry.id,
       name: functionName(entry.declaration),
-      signature: signature ? checker.signatureToString(signature) : entry.declaration.getText(entry.sourceFile).slice(0, 120),
+      className: functionOwner(entry.declaration) ? className(functionOwner(entry.declaration)!) : undefined,
+      classId: functionOwner(entry.declaration) ? classIds.get(functionOwner(entry.declaration)!) : undefined,
+      signature: signature ? checker.signatureToString(signature, entry.declaration, ts.TypeFormatFlags.NoTruncation) : entry.declaration.getText(entry.sourceFile).slice(0, 120),
       source: sourceSpan(entry.sourceFile, entry.fileId, entry.declaration),
       description: metadata.description,
       groupPath: metadata.groupPath,
@@ -635,6 +761,7 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     project: { name: path.basename(projectRoot), tsconfig: posix(path.relative(projectRoot, absoluteConfig)) || "tsconfig.json" },
     files,
     functions,
+    classes,
     entrypoints,
     roots: roots.map((entry) => entry.id),
     diagnostics,

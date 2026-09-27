@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { analyzeProject } from "./analyze.js";
@@ -12,7 +14,7 @@ const syntaxErrorFixture = path.resolve(path.dirname(fileURLToPath(import.meta.u
 
 const walk = (node: import("../model/flow.js").FlowNode): import("../model/flow.js").FlowNode[] => {
   const nested = node.kind === "sequence" ? node.children
-    : node.kind === "branch" ? [node.then, ...(node.else ? [node.else] : [])]
+    : node.kind === "branch" ? [...(node.conditionFlow ? [node.conditionFlow] : []), node.then, ...(node.else ? [node.else] : [])]
     : node.kind === "loop" ? [node.body, ...(node.initializerFlow ? [node.initializerFlow] : []), ...(node.conditionFlow ? [node.conditionFlow] : []), ...(node.incrementorFlow ? [node.incrementorFlow] : [])]
     : node.kind === "try" ? [node.body, ...(node.catch ? [node.catch.body] : []), ...(node.finally ? [node.finally] : [])]
     : [];
@@ -73,7 +75,8 @@ test("keeps function and call annotations separate from code arguments", () => {
   assert.equal(document.functions.find((entry) => entry.name === "arrowFlow")?.description, "화살표 함수 설명");
   const calls = walk(root.body).filter((entry): entry is import("../model/flow.js").CallNode => entry.kind === "call");
   const charge = calls.find((entry) => entry.annotation?.label === "결제 승인")!;
-  assert.deepEqual(charge.args, [{ expression: "token", annotation: "결제 토큰" }, { expression: "amount", annotation: "최종 금액" }]);
+  assert.deepEqual(charge.args.map(({ expression, type, annotation }) => ({ expression, type, annotation })), [{ expression: "token", type: "string", annotation: "결제 토큰" }, { expression: "amount", type: "number", annotation: "최종 금액" }]);
+  assert.equal(charge.returnType, "void");
   assert.ok(document.diagnostics.some((entry) => entry.code === "AMBIGUOUS_COVI_CALL"));
   assert.ok(document.diagnostics.some((entry) => entry.code === "DUPLICATE_ANNOTATION_ARG"));
   assert.ok(document.diagnostics.some((entry) => entry.code === "SPREAD_ANNOTATION_ARG"));
@@ -102,7 +105,40 @@ test("analyzes the independent order flow without inlining callbacks", () => {
   assert.deepEqual(calls.map((entry) => entry.calleeExpression), ["validateItems", "reserveStock", "calculateTotal", "approvePayment", "saveOrder", "notifyOrder"]);
   assert.deepEqual(calls.filter((entry) => entry.awaited).map((entry) => entry.calleeExpression), ["reserveStock", "approvePayment", "notifyOrder"]);
   assert.equal(calls.find((entry) => entry.calleeExpression === "approvePayment")?.annotation?.label, "결제 승인");
+  const constructor = document.functions.flatMap((entry) => walk(entry.body)).find((entry) => entry.kind === "call" && entry.calleeExpression === "new Error");
+  assert.ok(constructor?.kind === "call");
+  assert.equal(constructor.returnType, "Error");
+  assert.equal(constructor.args[0]?.type, '"empty order"');
   const total = document.functions.find((entry) => entry.name === "calculateTotal")!;
   assert.ok(walk(total.body).some((entry) => entry.kind === "call" && entry.calleeExpression === "items.reduce"));
   assert.equal(walk(total.body).some((entry) => entry.kind === "call" && entry.calleeExpression.includes("sum")), false);
+});
+
+
+test("groups if condition evaluation inside its branch and preserves short circuit order", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "covi-if-condition-"));
+  try {
+    writeFileSync(path.join(directory, "tsconfig.json"), JSON.stringify({ compilerOptions: { target: "ES2022", types: [] }, files: ["main.ts"] }));
+    writeFileSync(path.join(directory, "main.ts"), `
+      function first() { return false; }
+      function second() { return true; }
+      export function guarded() {
+        if (first() || second()) throw new Error("invalid");
+        return 1;
+      }
+    `);
+    const document = analyzeProject(path.join(directory, "tsconfig.json"));
+    const guarded = document.functions.find((entry) => entry.name === "guarded")!;
+    assert.deepEqual(guarded.body.children.map((entry) => entry.kind), ["branch", "return"]);
+    const branch = guarded.body.children[0]!;
+    assert.ok(branch.kind === "branch" && branch.conditionFlow);
+    assert.deepEqual(branch.conditionFlow.children.map((entry) => entry.kind), ["call", "branch"]);
+    const [first, conditional] = branch.conditionFlow.children;
+    assert.ok(first?.kind === "call" && first.calleeExpression === "first");
+    assert.ok(conditional?.kind === "branch" && conditional.origin === "expression" && conditional.when === "falsy");
+    assert.ok(conditional.then.children[0]?.kind === "call" && conditional.then.children[0].calleeExpression === "second");
+    assert.deepEqual(branch.then.children.map((entry) => entry.kind), ["call", "throw"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

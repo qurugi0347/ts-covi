@@ -16,6 +16,9 @@ export type SourceSpan = {
 
 export type CallArgument = {
   expression: string;
+  type?: string;
+  parameterName?: string;
+  description?: string;
   annotation?: string;
 };
 
@@ -26,11 +29,14 @@ export type CallAnnotation = {
 
 type BaseNode = { id: string; source: SourceSpan };
 export type SequenceNode = BaseNode & { kind: "sequence"; children: FlowNode[] };
-export type StatementNode = BaseNode & { kind: "statement"; code: string };
+export type StatementNode = BaseNode & { kind: "statement"; code: string; primaryCallId?: string };
 export type CallNode = BaseNode & {
   kind: "call";
   calleeExpression: string;
+  displayExpression?: string;
   args: CallArgument[];
+  returnType?: string;
+  signature?: string;
   awaited: boolean;
   targetFunctionId?: string;
   boundary?: BoundaryKind;
@@ -39,6 +45,8 @@ export type CallNode = BaseNode & {
 export type BranchNode = BaseNode & {
   kind: "branch";
   condition: string;
+  origin?: "statement" | "expression";
+  conditionFlow?: SequenceNode;
   when?: "truthy" | "falsy" | "nullish" | "non-nullish";
   then: SequenceNode;
   else?: SequenceNode;
@@ -61,6 +69,7 @@ export type JumpNode = BaseNode & {
 };
 export type ExitNode = BaseNode & {
   kind: "return" | "throw";
+  primaryCallId?: string;
   expression?: string;
 };
 export type TryNode = BaseNode & {
@@ -88,6 +97,27 @@ export type FlowNode =
   | TryNode
   | UnsupportedNode;
 
+export type ClassVisibility = "public" | "protected" | "private";
+export type ClassField = {
+  name: string; type: string; source: SourceSpan; description?: string;
+  visibility: ClassVisibility; static: boolean; readonly: boolean; optional: boolean;
+};
+export type ClassParameter = {
+  name: string; type: string; source: SourceSpan; description?: string;
+  optional: boolean; rest: boolean; visibility?: ClassVisibility; readonly?: boolean;
+};
+export type ClassConstructor = { source: SourceSpan; signature: string; parameters: ClassParameter[] };
+export type ClassMethod = {
+  name: string; source: SourceSpan; signature: string; description?: string;
+  visibility: ClassVisibility; static: boolean;
+  kind: "method" | "property-function" | "get" | "set"; functionId?: string;
+};
+export type FlowClass = {
+  id: string; name: string; source: SourceSpan; description?: string;
+  extends?: string; implements: string[]; fields: ClassField[];
+  constructor?: ClassConstructor; methods: ClassMethod[];
+};
+
 export type FlowFunction = {
   id: string;
   name: string;
@@ -95,6 +125,8 @@ export type FlowFunction = {
   source: SourceSpan;
   description?: string;
   groupPath?: string[];
+  className?: string;
+  classId?: string;
   body: SequenceNode;
 };
 
@@ -135,6 +167,7 @@ export type FlowDocument = {
   project: { name: string; tsconfig: string };
   files: Array<{ id: string; path: string; contentHash: string; source: string }>;
   functions: FlowFunction[];
+  classes?: FlowClass[];
   modules?: FlowModule[];
   entrypoints?: EntryPoint[];
   roots: string[];
@@ -239,10 +272,27 @@ function node(
     array(entry, childPath).map((child, index) => node(child, `${childPath}[${index}]`, fileLengths, nodeIds, activeLoopIds, referencedFunctions));
 
   switch (kind) {
-    case "sequence":
-      return { id, kind, source, children: children(candidate.children, `${path}.children`) };
+    case "sequence": {
+      const entries = children(candidate.children, `${path}.children`);
+      entries.forEach((entry, index) => {
+        if (!(entry.kind === "statement" || entry.kind === "return" || entry.kind === "throw") || entry.primaryCallId === undefined) return;
+        const previous = entries[index - 1];
+        if (!previous || previous.kind !== "call" || previous.id !== entry.primaryCallId
+          || previous.source.fileId !== entry.source.fileId
+          || previous.source.start < entry.source.start || previous.source.end > entry.source.end) {
+          throw new FlowValidationError(`${path}.children[${index}].primaryCallId must reference the immediately preceding call inside its source`);
+        }
+        // A receiver/argument evaluation before this call prevents single-call grouping.
+        const evaluation = entries[index - 2];
+        if (evaluation && evaluation.source.fileId === entry.source.fileId
+          && evaluation.source.start >= entry.source.start && evaluation.source.end <= entry.source.end) {
+          throw new FlowValidationError(`${path}.children[${index}].primaryCallId contains additional evaluation`);
+        }
+      });
+      return { id, kind, source, children: entries };
+    }
     case "statement":
-      return { id, kind, source, code: string(candidate.code, `${path}.code`) };
+      return { id, kind, source, code: string(candidate.code, `${path}.code`), primaryCallId: optionalString(candidate.primaryCallId, `${path}.primaryCallId`) };
     case "call": {
       const targetFunctionId = optionalString(candidate.targetFunctionId, `${path}.targetFunctionId`);
       if (targetFunctionId) referencedFunctions.add(targetFunctionId);
@@ -256,6 +306,9 @@ function node(
         const argument = object(entry, `${path}.args[${index}]`);
         return {
           expression: string(argument.expression, `${path}.args[${index}].expression`),
+          type: optionalString(argument.type, `${path}.args[${index}].type`),
+          parameterName: optionalString(argument.parameterName, `${path}.args[${index}].parameterName`),
+          description: optionalString(argument.description, `${path}.args[${index}].description`),
           annotation: optionalString(argument.annotation, `${path}.args[${index}].annotation`),
         };
       });
@@ -276,7 +329,10 @@ function node(
         kind,
         source,
         calleeExpression: string(candidate.calleeExpression, `${path}.calleeExpression`),
+        displayExpression: optionalString(candidate.displayExpression, `${path}.displayExpression`),
         args,
+        returnType: optionalString(candidate.returnType, `${path}.returnType`),
+        signature: optionalString(candidate.signature, `${path}.signature`),
         awaited: boolean(candidate.awaited, `${path}.awaited`),
         targetFunctionId,
         boundary,
@@ -293,7 +349,9 @@ function node(
         kind,
         source,
         condition: string(candidate.condition, `${path}.condition`),
+        origin: candidate.origin === undefined ? undefined : enumValue(candidate.origin, `${path}.origin`, ["statement", "expression"] as const),
         when,
+        conditionFlow: candidate.conditionFlow === undefined ? undefined : sequence(candidate.conditionFlow, `${path}.conditionFlow`),
         then: sequence(candidate.then, `${path}.then`),
         else: candidate.else === undefined ? undefined : sequence(candidate.else, `${path}.else`),
       };
@@ -325,7 +383,7 @@ function node(
     }
     case "return":
     case "throw":
-      return { id, kind, source, expression: optionalString(candidate.expression, `${path}.expression`) };
+      return { id, kind, source, expression: optionalString(candidate.expression, `${path}.expression`), primaryCallId: optionalString(candidate.primaryCallId, `${path}.primaryCallId`) };
     case "try": {
       const catchValue = candidate.catch === undefined ? undefined : object(candidate.catch, `${path}.catch`);
       return {
@@ -391,10 +449,72 @@ export function validateFlowDocument(value: unknown): FlowDocument {
       signature: string(fn.signature, `document.functions[${index}].signature`),
       source: span(fn.source, `document.functions[${index}].source`, fileLengths),
       description: optionalString(fn.description, `document.functions[${index}].description`),
+      className: optionalString(fn.className, `document.functions[${index}].className`),
+      classId: optionalString(fn.classId, `document.functions[${index}].classId`),
       groupPath: fn.groupPath === undefined ? undefined : array(fn.groupPath, `document.functions[${index}].groupPath`).map((part, partIndex) => string(part, `document.functions[${index}].groupPath[${partIndex}]`)),
       body,
     };
   });
+  const functionsById = new Map(functions.map((fn) => [fn.id, fn]));
+  const classIds = new Set<string>();
+  const ownedFunctions = new Set<string>();
+  const visibility = (value: unknown, path: string): ClassVisibility => enumValue(value, path, ["public", "protected", "private"] as const);
+  const classes = candidate.classes === undefined ? undefined : array(candidate.classes, "document.classes").map((entry, index): FlowClass => {
+    const path = `document.classes[${index}]`;
+    const raw = object(entry, path);
+    const id = string(raw.id, `${path}.id`);
+    if (classIds.has(id)) throw new FlowValidationError(`duplicate class id: ${id}`);
+    classIds.add(id);
+    const source = span(raw.source, `${path}.source`, fileLengths);
+    const memberSource = (value: unknown, memberPath: string): SourceSpan => {
+      const result = span(value, memberPath, fileLengths);
+      if (result.fileId !== source.fileId || result.start < source.start || result.end > source.end) throw new FlowValidationError(`${memberPath} is outside its class`);
+      return result;
+    };
+    const fields = array(raw.fields, `${path}.fields`).map((entry, index): ClassField => {
+      const p = `${path}.fields[${index}]`; const field = object(entry, p);
+      return { name: string(field.name, `${p}.name`), type: string(field.type, `${p}.type`), source: memberSource(field.source, `${p}.source`), description: optionalString(field.description, `${p}.description`), visibility: visibility(field.visibility, `${p}.visibility`), static: boolean(field.static, `${p}.static`), readonly: boolean(field.readonly, `${p}.readonly`), optional: boolean(field.optional, `${p}.optional`) };
+    });
+    let constructor: ClassConstructor | undefined;
+    if (Object.hasOwn(raw, "constructor") && raw.constructor !== undefined) {
+      const p = `${path}.constructor`; const value = object(raw.constructor, p);
+      const constructorSource = memberSource(value.source, `${p}.source`);
+      const parameters = array(value.parameters, `${p}.parameters`).map((entry, index): ClassParameter => {
+        const p2 = `${p}.parameters[${index}]`; const parameter = object(entry, p2);
+        const parameterSource = memberSource(parameter.source, `${p2}.source`);
+        if (parameterSource.start < constructorSource.start || parameterSource.end > constructorSource.end) throw new FlowValidationError(`${p2}.source is outside its constructor`);
+        return { name: string(parameter.name, `${p2}.name`), type: string(parameter.type, `${p2}.type`), source: parameterSource, description: optionalString(parameter.description, `${p2}.description`), optional: boolean(parameter.optional, `${p2}.optional`), rest: boolean(parameter.rest, `${p2}.rest`), visibility: parameter.visibility === undefined ? undefined : visibility(parameter.visibility, `${p2}.visibility`), readonly: parameter.readonly === undefined ? undefined : boolean(parameter.readonly, `${p2}.readonly`) };
+      });
+      constructor = { source: constructorSource, signature: string(value.signature, `${p}.signature`), parameters };
+    }
+    const methods = array(raw.methods, `${path}.methods`).map((entry, index): ClassMethod => {
+      const p = `${path}.methods[${index}]`; const method = object(entry, p);
+      const methodSource = memberSource(method.source, `${p}.source`);
+      const kind = enumValue(method.kind, `${p}.kind`, ["method", "property-function", "get", "set"] as const);
+      const functionId = optionalString(method.functionId, `${p}.functionId`);
+      if (functionId !== undefined) {
+        const fn = functionsById.get(functionId);
+        if (!fn || ownedFunctions.has(functionId) || fn.classId !== id || fn.source.fileId !== source.fileId || fn.source.start < methodSource.start || fn.source.end > methodSource.end || kind === "get" || kind === "set") throw new FlowValidationError(`${p}.functionId has invalid class ownership`);
+        ownedFunctions.add(functionId);
+      }
+      return { name: string(method.name, `${p}.name`), source: methodSource, signature: string(method.signature, `${p}.signature`), description: optionalString(method.description, `${p}.description`), visibility: visibility(method.visibility, `${p}.visibility`), static: boolean(method.static, `${p}.static`), kind, functionId };
+    });
+    return { id, name: string(raw.name, `${path}.name`), source, description: optionalString(raw.description, `${path}.description`), extends: optionalString(raw.extends, `${path}.extends`), implements: array(raw.implements, `${path}.implements`).map((entry, index) => string(entry, `${path}.implements[${index}]`)), fields, constructor, methods };
+  });
+  const classesByFile = new Map<string, FlowClass[]>();
+  for (const entry of classes ?? []) {
+    const entries = classesByFile.get(entry.source.fileId) ?? [];
+    entries.push(entry);
+    classesByFile.set(entry.source.fileId, entries);
+  }
+  for (const fn of functions) {
+    if (fn.classId !== undefined) {
+      if (!classIds.has(fn.classId) || !ownedFunctions.has(fn.id)) throw new FlowValidationError(`invalid class reference: ${fn.classId}`);
+      const owners = (classesByFile.get(fn.source.fileId) ?? []).filter((entry) => entry.source.start <= fn.source.start && entry.source.end >= fn.source.end);
+      const directOwner = owners.sort((a, b) => (a.source.end - a.source.start) - (b.source.end - b.source.start))[0];
+      if (directOwner?.id !== fn.classId) throw new FlowValidationError(`function ${fn.id} belongs to a nested class`);
+    }
+  }
   const moduleIds = new Set<string>();
   const modules = candidate.modules === undefined ? undefined : array(candidate.modules, "document.modules").map((entry, index) => {
     const module = object(entry, `document.modules[${index}]`);
@@ -507,7 +627,7 @@ export function validateFlowDocument(value: unknown): FlowDocument {
   };
   const countNodes = (entry: FlowNode): { supported: number; unsupported: number } => {
     const nested = entry.kind === "sequence" ? entry.children
-      : entry.kind === "branch" ? [entry.then, ...(entry.else ? [entry.else] : [])]
+      : entry.kind === "branch" ? [...(entry.conditionFlow ? [entry.conditionFlow] : []), entry.then, ...(entry.else ? [entry.else] : [])]
       : entry.kind === "loop" ? [entry.body, ...[entry.initializerFlow, entry.conditionFlow, entry.incrementorFlow].filter((child): child is SequenceNode => Boolean(child))]
       : entry.kind === "try" ? [entry.body, ...[entry.catch?.body, entry.finally].filter((child): child is SequenceNode => Boolean(child))]
       : [];
@@ -539,6 +659,7 @@ export function validateFlowDocument(value: unknown): FlowDocument {
     project: { name: string(project.name, "document.project.name"), tsconfig: string(project.tsconfig, "document.project.tsconfig") },
     files,
     functions,
+    classes,
     modules,
     entrypoints,
     roots,
