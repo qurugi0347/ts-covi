@@ -94,3 +94,24 @@ dd { margin: 0; overflow-wrap: anywhere; }
 
 .functions button > span { min-width: 0; overflow-wrap: anywhere; }
 @media (max-width: 700px) { .block-header .block-main { flex-basis: 100%; } }
+
+.function-explorer ul { margin: 0; }
+.function-explorer li ul { padding-left: .65rem; border-left: 1px solid #e2e8f0; }
+.function-explorer summary { min-height: 44px; padding: .65rem .3rem; cursor: pointer; overflow-wrap: anywhere; }
+.explorer-kind { color: #64748b; font-size: .68rem; }
+
+.explorer-class-row { display: flex; align-items: stretch; }
+.functions .explorer-toggle { width: auto; min-width: 44px; flex: none; justify-content: center; padding: .5rem; }
+.explorer-class-row > button:last-child { min-width: 0; }
+.class-overview section { margin-top: 1.5rem; }
+.class-overview h3 { margin: 0 0 .6rem; }
+.class-members { list-style: none; margin: 0; padding: 0; display: grid; gap: .7rem; }
+.class-members > li { padding: .8rem; border: 1px solid #dbe2ea; border-radius: .65rem; min-width: 0; }
+.class-members code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; }
+.class-members button { min-height: 44px; padding: .5rem; border: 0; border-radius: .5rem; color: #4338ca; background: #eeedff; cursor: pointer; text-align: left; overflow-wrap: anywhere; }
+.class-members li > button { margin-top: .4rem; }
+.class-members strong, .class-members small { overflow-wrap: anywhere; }
+.class-members small { color: #64748b; font-size: .75rem; }
+.class-members p { margin: .5rem 0; }
+.class-method-heading, .class-members li > button:first-child { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.class-method-heading { margin-bottom: .5rem; }

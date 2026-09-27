@@ -7,7 +7,7 @@ export type NavigationFrame = {
 };
 export type NavigationState = {
   mode: "entrypoints" | "functions"; entry?: string; target: number;
-  functionId?: string; moduleId?: string; node?: string; ancestors: string[];
+  functionId?: string; moduleId?: string; classId?: string; node?: string; ancestors: string[];
   open: string[]; trail: NavigationFrame[]; q: string;
 };
 const LIMIT = 64 * 1024;
@@ -54,15 +54,27 @@ export function readNavigation(url: URL, flow: FlowDocument | undefined, entries
   const target = entry?.targets[state.target];
   state.functionId = state.mode === "entrypoints" ? target?.functionId : fallback.functionId ?? flow.roots[0] ?? flow.functions[0]?.id;
   state.moduleId = state.mode === "entrypoints" ? target?.moduleId : undefined;
+  if (typeof raw.q === "string") state.q = raw.q;
+  else if (raw.q !== undefined) changed = true;
   const fn = url.searchParams.get("fn");
-  if (fn && flow.functions.some((item) => item.id === fn) && raw.module === undefined) { state.functionId = fn; state.moduleId = undefined; }
+  const classId = url.searchParams.get("class");
+  const validFunction = fn && flow.functions.some((item) => item.id === fn);
+  if (classId) {
+    if (validFunction) {
+      state.functionId = fn;
+      state.moduleId = undefined;
+      changed = true;
+    } else if (flow.classes?.some((item) => item.id === classId)) {
+      const stale = fn || raw.module !== undefined || raw.entry !== undefined || raw.target !== undefined || raw.node !== undefined || raw.ancestors !== undefined || raw.open !== undefined || raw.trail !== undefined || (raw.mode !== undefined && raw.mode !== "functions");
+      return { state: { mode: "functions", target: 0, classId, q: state.q, ancestors: [], open: [], trail: [] }, ...(changed || stale ? { warning } : {}) };
+    } else return { state: { ...fallback, q: state.q }, warning };
+  }
+  if (validFunction && (raw.module === undefined || classId)) { state.functionId = fn; state.moduleId = undefined; }
   else if (fn) changed = true;
   if (raw.module !== undefined) {
     if (!fn && typeof raw.module === "string" && flow.modules?.some((item) => item.id === raw.module)) { state.moduleId = raw.module; state.functionId = undefined; }
     else changed = true;
   }
-  if (typeof raw.q === "string") state.q = raw.q;
-  else if (raw.q !== undefined) changed = true;
   const body = (functionId?: string, moduleId?: string) => flow.functions.find((item) => item.id === functionId)?.body ?? flow.modules?.find((item) => item.id === moduleId)?.body;
   const connected = (functionId: string | undefined, moduleId: string | undefined, ancestors: string[]) => {
     let root = body(functionId, moduleId);
@@ -133,7 +145,8 @@ export function readNavigation(url: URL, flow: FlowDocument | undefined, entries
 
 export function navigationUrl(url: URL, state: NavigationState): URL {
   const result = new URL(url);
-  result.searchParams.delete("fn"); result.searchParams.delete("view");
+  result.searchParams.delete("fn"); result.searchParams.delete("view"); result.searchParams.delete("class");
+  if (state.classId) result.searchParams.set("class", state.classId);
   if (state.functionId) result.searchParams.set("fn", state.functionId);
   const view = { v: 1, mode: state.mode, entry: state.entry, target: state.target || undefined,
     module: state.moduleId, q: state.q || undefined, node: state.node,
