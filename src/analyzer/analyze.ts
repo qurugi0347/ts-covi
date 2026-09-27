@@ -9,6 +9,8 @@ import {
   type BoundaryKind,
   type CallNode,
   type FlowDocument,
+  type FlowClass,
+  type ClassVisibility,
   type FlowFunction,
   type FlowNode,
   type SequenceNode,
@@ -88,27 +90,39 @@ const supportedFunction = (node: ts.Node): node is ts.FunctionLikeDeclaration =>
 
 const functionName = (node: ts.FunctionLikeDeclaration): string => {
   if (node.name) return node.name.getText(node.getSourceFile());
-  const parent = node.parent;
+  let parent: ts.Node = node.parent;
+  while (ts.isParenthesizedExpression(parent) || ts.isAsExpression(parent) || ts.isTypeAssertionExpression(parent) || ts.isNonNullExpression(parent) || ts.isSatisfiesExpression(parent)) parent = parent.parent;
   if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) return parent.name.text;
   if (ts.isPropertyAssignment(parent) || ts.isPropertyDeclaration(parent)) return parent.name.getText();
   return `<anonymous@${node.getStart()}>`;
 };
 
-const functionClass = (node: ts.FunctionLikeDeclaration): string | undefined => {
-  const member = ts.isPropertyDeclaration(node.parent) ? node.parent : node;
-  const owner = member.parent;
-  if (!ts.isClassDeclaration(owner) && !ts.isClassExpression(owner)) return undefined;
-  return owner.name?.text ?? `<anonymous class@${owner.getStart()}>`;
+const unwrapClassInitializer = (node: ts.Expression): ts.Expression => {
+  while (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node)) node = node.expression;
+  return node;
 };
+const functionOwner = (node: ts.FunctionLikeDeclaration): ts.ClassLikeDeclaration | undefined => {
+  if (ts.isMethodDeclaration(node) && (ts.isClassDeclaration(node.parent) || ts.isClassExpression(node.parent))) return node.parent;
+  let parent: ts.Node = node.parent;
+  while (ts.isParenthesizedExpression(parent) || ts.isAsExpression(parent) || ts.isTypeAssertionExpression(parent) || ts.isNonNullExpression(parent) || ts.isSatisfiesExpression(parent)) parent = parent.parent;
+  if (!ts.isPropertyDeclaration(parent) || !parent.initializer || unwrapClassInitializer(parent.initializer) !== node) return undefined;
+  return ts.isClassDeclaration(parent.parent) || ts.isClassExpression(parent.parent) ? parent.parent : undefined;
+};
+const className = (node: ts.ClassLikeDeclaration): string => node.name?.text ?? `<anonymous class@${node.getStart()}>`;
 
 const functionBody = (node: ts.FunctionLikeDeclaration): ts.ConciseBody | undefined => node.body;
 
-const functionMetadata = (sourceFile: ts.SourceFile, node: ts.FunctionLikeDeclaration): { description?: string; groupPath?: string[]; root: boolean } => {
+const functionMetadata = (sourceFile: ts.SourceFile, node: ts.Node): { description?: string; groupPath?: string[]; root: boolean } => {
   let owner: ts.Node = node;
   if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && ts.isVariableDeclaration(node.parent)) {
     owner = node.parent.parent.parent;
   } else if ((ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && ts.isPropertyAssignment(node.parent)) {
     owner = node.parent;
+  }
+  if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
+    let member: ts.Node = node.parent;
+    while (ts.isParenthesizedExpression(member) || ts.isAsExpression(member) || ts.isTypeAssertionExpression(member) || ts.isNonNullExpression(member) || ts.isSatisfiesExpression(member)) member = member.parent;
+    if (ts.isPropertyDeclaration(member) && functionOwner(node)) owner = member;
   }
   const trivia = sourceFile.text.slice(owner.getFullStart(), owner.getStart(sourceFile));
   const match = trivia.match(/\/\*\*([\s\S]*?)\*\/\s*$/);
@@ -621,6 +635,57 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     visit(sourceFile);
   }
   const functionIds = new Map<ts.Node, string>(indexed.map((entry) => [entry.declaration, entry.id]));
+  const classIds = new Map<ts.ClassLikeDeclaration, string>();
+  const classes: FlowClass[] = [];
+  const hasModifier = (node: ts.Node, kind: ts.SyntaxKind): boolean => ts.canHaveModifiers(node) && Boolean(ts.getModifiers(node)?.some((modifier) => modifier.kind === kind));
+  const visibility = (node: ts.NamedDeclaration): ClassVisibility => node.name && ts.isPrivateIdentifier(node.name) || hasModifier(node, ts.SyntaxKind.PrivateKeyword) ? "private" : hasModifier(node, ts.SyntaxKind.ProtectedKeyword) ? "protected" : "public";
+  const typeText = (node: ts.Node): string => checker.typeToString(checker.getTypeAtLocation(node), node, ts.TypeFormatFlags.NoTruncation);
+  const signatureText = (node: ts.SignatureDeclaration): string => {
+    const signature = checker.getSignatureFromDeclaration(node);
+    return signature ? checker.signatureToString(signature, node, ts.TypeFormatFlags.NoTruncation) : node.getText(node.getSourceFile()).split("{")[0]!.trim();
+  };
+  for (const sourceFile of sourceFiles) {
+    const fileId = fileIds.get(posix(path.relative(projectRoot, realpathSync(sourceFile.fileName))))!;
+    const visit = (node: ts.Node): void => {
+      if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) {
+        const id = `class:${fileId}:${node.getStart(sourceFile)}`;
+        classIds.set(node, id);
+        const span = (member: ts.Node) => sourceSpan(sourceFile, fileId, member);
+        const description = (member: ts.Node) => functionMetadata(sourceFile, member).description;
+        const constructorDeclarations = node.members.filter(ts.isConstructorDeclaration);
+        const constructorNode = constructorDeclarations.find((member) => member.body) ?? constructorDeclarations[0];
+        const fields: FlowClass["fields"] = [];
+        const methods: FlowClass["methods"] = [];
+        const methodKeys = new Set<string>();
+        for (const member of node.members) {
+          if (ts.isPropertyDeclaration(member)) {
+            const initializer = member.initializer && unwrapClassInitializer(member.initializer);
+            if (initializer && (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer))) {
+              methods.push({ name: member.name.getText(sourceFile), source: span(member), signature: signatureText(initializer), description: description(member), visibility: visibility(member), static: hasModifier(member, ts.SyntaxKind.StaticKeyword), kind: "property-function", functionId: functionIds.get(initializer) });
+            } else fields.push({ name: member.name.getText(sourceFile), type: typeText(member), source: span(member), description: description(member), visibility: visibility(member), static: hasModifier(member, ts.SyntaxKind.StaticKeyword), readonly: hasModifier(member, ts.SyntaxKind.ReadonlyKeyword), optional: Boolean(member.questionToken) });
+          } else if (ts.isMethodDeclaration(member) || ts.isGetAccessorDeclaration(member) || ts.isSetAccessorDeclaration(member)) {
+            const kind = ts.isGetAccessorDeclaration(member) ? "get" : ts.isSetAccessorDeclaration(member) ? "set" : "method";
+            const key = `${kind}:${hasModifier(member, ts.SyntaxKind.StaticKeyword)}:${member.name.getText(sourceFile)}`;
+            if (methodKeys.has(key)) continue;
+            if (ts.isMethodDeclaration(member) && !member.body && node.members.some((other) => ts.isMethodDeclaration(other) && other.body && other.name.getText(sourceFile) === member.name.getText(sourceFile) && hasModifier(other, ts.SyntaxKind.StaticKeyword) === hasModifier(member, ts.SyntaxKind.StaticKeyword))) continue;
+            methodKeys.add(key);
+            methods.push({ name: member.name.getText(sourceFile), source: span(member), signature: signatureText(member), description: description(member), visibility: visibility(member), static: hasModifier(member, ts.SyntaxKind.StaticKeyword), kind, functionId: kind === "method" ? functionIds.get(member) : undefined });
+          }
+        }
+        const constructor = constructorNode ? { source: span(constructorNode), signature: signatureText(constructorNode), parameters: constructorNode.parameters.map((parameter) => {
+          const parameterProperty = hasModifier(parameter, ts.SyntaxKind.PublicKeyword) || hasModifier(parameter, ts.SyntaxKind.ProtectedKeyword) || hasModifier(parameter, ts.SyntaxKind.PrivateKeyword) || hasModifier(parameter, ts.SyntaxKind.ReadonlyKeyword);
+          const symbol = checker.getSymbolAtLocation(parameter.name);
+          const doc = symbol && ts.displayPartsToString(symbol.getDocumentationComment(checker)).trim();
+          const result = { name: parameter.name.getText(sourceFile), type: typeText(parameter), source: span(parameter), description: doc || description(parameter), optional: Boolean(parameter.questionToken || parameter.initializer), rest: Boolean(parameter.dotDotDotToken), visibility: parameterProperty ? visibility(parameter) : undefined, readonly: parameterProperty ? hasModifier(parameter, ts.SyntaxKind.ReadonlyKeyword) : undefined };
+          if (parameterProperty) fields.push({ ...result, visibility: visibility(parameter), readonly: Boolean(result.readonly), static: false });
+          return result;
+        }) } : undefined;
+        classes.push({ id, name: className(node), source: span(node), description: description(node), extends: node.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types.map((type) => type.getText(sourceFile)).join(", "), implements: node.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ImplementsKeyword)?.types.map((type) => type.getText(sourceFile)) ?? [], fields, constructor, methods });
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+  }
   let supported = 0;
   let unsupportedCount = 0;
   const functions: FlowFunction[] = indexed.map((entry) => {
@@ -644,7 +709,8 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     return {
       id: entry.id,
       name: functionName(entry.declaration),
-      className: functionClass(entry.declaration),
+      className: functionOwner(entry.declaration) ? className(functionOwner(entry.declaration)!) : undefined,
+      classId: functionOwner(entry.declaration) ? classIds.get(functionOwner(entry.declaration)!) : undefined,
       signature: signature ? checker.signatureToString(signature) : entry.declaration.getText(entry.sourceFile).slice(0, 120),
       source: sourceSpan(entry.sourceFile, entry.fileId, entry.declaration),
       description: metadata.description,
@@ -674,6 +740,7 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     project: { name: path.basename(projectRoot), tsconfig: posix(path.relative(projectRoot, absoluteConfig)) || "tsconfig.json" },
     files,
     functions,
+    classes,
     entrypoints,
     roots: roots.map((entry) => entry.id),
     diagnostics,
