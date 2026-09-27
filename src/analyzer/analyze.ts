@@ -90,8 +90,15 @@ const functionName = (node: ts.FunctionLikeDeclaration): string => {
   if (node.name) return node.name.getText(node.getSourceFile());
   const parent = node.parent;
   if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) return parent.name.text;
-  if (ts.isPropertyAssignment(parent)) return parent.name.getText();
+  if (ts.isPropertyAssignment(parent) || ts.isPropertyDeclaration(parent)) return parent.name.getText();
   return `<anonymous@${node.getStart()}>`;
+};
+
+const functionClass = (node: ts.FunctionLikeDeclaration): string | undefined => {
+  const member = ts.isPropertyDeclaration(node.parent) ? node.parent : node;
+  const owner = member.parent;
+  if (!ts.isClassDeclaration(owner) && !ts.isClassExpression(owner)) return undefined;
+  return owner.name?.text ?? `<anonymous class@${owner.getStart()}>`;
 };
 
 const functionBody = (node: ts.FunctionLikeDeclaration): ts.ConciseBody | undefined => node.body;
@@ -637,6 +644,7 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
     return {
       id: entry.id,
       name: functionName(entry.declaration),
+      className: functionClass(entry.declaration),
       signature: signature ? checker.signatureToString(signature) : entry.declaration.getText(entry.sourceFile).slice(0, 120),
       source: sourceSpan(entry.sourceFile, entry.fileId, entry.declaration),
       description: metadata.description,
