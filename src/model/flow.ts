@@ -16,6 +16,9 @@ export type SourceSpan = {
 
 export type CallArgument = {
   expression: string;
+  type?: string;
+  parameterName?: string;
+  description?: string;
   annotation?: string;
 };
 
@@ -32,6 +35,8 @@ export type CallNode = BaseNode & {
   calleeExpression: string;
   displayExpression?: string;
   args: CallArgument[];
+  returnType?: string;
+  signature?: string;
   awaited: boolean;
   targetFunctionId?: string;
   boundary?: BoundaryKind;
@@ -41,6 +46,7 @@ export type BranchNode = BaseNode & {
   kind: "branch";
   condition: string;
   origin?: "statement" | "expression";
+  conditionFlow?: SequenceNode;
   when?: "truthy" | "falsy" | "nullish" | "non-nullish";
   then: SequenceNode;
   else?: SequenceNode;
@@ -300,6 +306,9 @@ function node(
         const argument = object(entry, `${path}.args[${index}]`);
         return {
           expression: string(argument.expression, `${path}.args[${index}].expression`),
+          type: optionalString(argument.type, `${path}.args[${index}].type`),
+          parameterName: optionalString(argument.parameterName, `${path}.args[${index}].parameterName`),
+          description: optionalString(argument.description, `${path}.args[${index}].description`),
           annotation: optionalString(argument.annotation, `${path}.args[${index}].annotation`),
         };
       });
@@ -322,6 +331,8 @@ function node(
         calleeExpression: string(candidate.calleeExpression, `${path}.calleeExpression`),
         displayExpression: optionalString(candidate.displayExpression, `${path}.displayExpression`),
         args,
+        returnType: optionalString(candidate.returnType, `${path}.returnType`),
+        signature: optionalString(candidate.signature, `${path}.signature`),
         awaited: boolean(candidate.awaited, `${path}.awaited`),
         targetFunctionId,
         boundary,
@@ -340,6 +351,7 @@ function node(
         condition: string(candidate.condition, `${path}.condition`),
         origin: candidate.origin === undefined ? undefined : enumValue(candidate.origin, `${path}.origin`, ["statement", "expression"] as const),
         when,
+        conditionFlow: candidate.conditionFlow === undefined ? undefined : sequence(candidate.conditionFlow, `${path}.conditionFlow`),
         then: sequence(candidate.then, `${path}.then`),
         else: candidate.else === undefined ? undefined : sequence(candidate.else, `${path}.else`),
       };
@@ -608,7 +620,7 @@ export function validateFlowDocument(value: unknown): FlowDocument {
   };
   const countNodes = (entry: FlowNode): { supported: number; unsupported: number } => {
     const nested = entry.kind === "sequence" ? entry.children
-      : entry.kind === "branch" ? [entry.then, ...(entry.else ? [entry.else] : [])]
+      : entry.kind === "branch" ? [...(entry.conditionFlow ? [entry.conditionFlow] : []), entry.then, ...(entry.else ? [entry.else] : [])]
       : entry.kind === "loop" ? [entry.body, ...[entry.initializerFlow, entry.conditionFlow, entry.incrementorFlow].filter((child): child is SequenceNode => Boolean(child))]
       : entry.kind === "try" ? [entry.body, ...[entry.catch?.body, entry.finally].filter((child): child is SequenceNode => Boolean(child))]
       : [];

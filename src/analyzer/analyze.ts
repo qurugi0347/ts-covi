@@ -212,6 +212,25 @@ const primaryCallId = (expression: ts.Expression | undefined, evaluations: FlowN
     && evaluations[0].source.end === expression.getEnd() ? evaluations[0].id : undefined;
 };
 
+const callMetadata = (context: AnalyzeContext, expression: ts.CallExpression | ts.NewExpression): Pick<CallNode, "args" | "signature"> => {
+  const signature = context.checker.getResolvedSignature(expression);
+  let spreadSeen = false;
+  return {
+    signature: signature ? context.checker.signatureToString(signature, expression, ts.TypeFormatFlags.NoTruncation) : undefined,
+    args: (expression.arguments ?? []).map((argument, index) => {
+      spreadSeen ||= ts.isSpreadElement(argument);
+      const parameter = spreadSeen ? undefined : signature?.parameters[index];
+      const description = parameter ? ts.displayPartsToString(parameter.getDocumentationComment(context.checker)).trim() : undefined;
+      return {
+        expression: argument.getText(context.sourceFile),
+        type: context.checker.typeToString(context.checker.getTypeAtLocation(argument), argument, ts.TypeFormatFlags.NoTruncation),
+        parameterName: parameter?.getName(),
+        description: description || undefined,
+      };
+    }),
+  };
+};
+
 const createCallNode = (context: AnalyzeContext, expression: ts.CallExpression, awaited: boolean): CallNode => {
   const resolution = resolveCall(context, expression);
   const call: CallNode = {
@@ -220,7 +239,8 @@ const createCallNode = (context: AnalyzeContext, expression: ts.CallExpression, 
     source: sourceSpan(context.sourceFile, context.fileId, expression),
     calleeExpression: expression.expression.getText(context.sourceFile),
     displayExpression: callDisplayExpression(expression.expression, Boolean(expression.questionDotToken)),
-    args: expression.arguments.map((argument) => ({ expression: argument.getText(context.sourceFile) })),
+    ...callMetadata(context, expression),
+    returnType: context.checker.typeToString(context.checker.getTypeAtLocation(expression), expression, ts.TypeFormatFlags.NoTruncation),
     awaited,
     ...resolution,
   };
@@ -347,7 +367,8 @@ const expressionNodes = (context: AnalyzeContext, expression: ts.Expression, awa
       kind: "call",
       source: sourceSpan(context.sourceFile, context.fileId, expression),
       calleeExpression: `new ${expression.expression.getText(context.sourceFile)}`,
-      args: expression.arguments?.map((argument) => ({ expression: argument.getText(context.sourceFile) })) ?? [],
+      ...callMetadata(context, expression),
+      returnType: context.checker.typeToString(context.checker.getTypeAtLocation(expression), expression, ts.TypeFormatFlags.NoTruncation),
       awaited: false,
       ...resolveCall(context, expression),
     };
@@ -504,7 +525,7 @@ const statementNodes = (context: AnalyzeContext, statement: ts.Statement, label?
     const then = asBlock(context, statement.thenStatement);
     const otherwise = statement.elseStatement ? asBlock(context, statement.elseStatement) : undefined;
     context.supported += 1;
-    return finish([...before, { id: context.nextNodeId(), kind: "branch", origin: "statement", source: sourceSpan(context.sourceFile, context.fileId, statement), condition: statement.expression.getText(context.sourceFile), when: "truthy", then: then.sequence, else: otherwise?.sequence }], then.terminates && Boolean(otherwise?.terminates));
+    return finish([{ id: context.nextNodeId(), kind: "branch", origin: "statement", conditionFlow: before.length ? sequence(context, statement.expression, before) : undefined, source: sourceSpan(context.sourceFile, context.fileId, statement), condition: statement.expression.getText(context.sourceFile), when: "truthy", then: then.sequence, else: otherwise?.sequence }], then.terminates && Boolean(otherwise?.terminates));
   }
   if (ts.isIterationStatement(statement, false)) return finish([loopParts(context, statement, label)], false);
   if (ts.isBreakStatement(statement) || ts.isContinueStatement(statement)) {
@@ -711,7 +732,7 @@ export function analyzeProject(tsconfigPath: string, excludedPaths: string[] = [
       name: functionName(entry.declaration),
       className: functionOwner(entry.declaration) ? className(functionOwner(entry.declaration)!) : undefined,
       classId: functionOwner(entry.declaration) ? classIds.get(functionOwner(entry.declaration)!) : undefined,
-      signature: signature ? checker.signatureToString(signature) : entry.declaration.getText(entry.sourceFile).slice(0, 120),
+      signature: signature ? checker.signatureToString(signature, entry.declaration, ts.TypeFormatFlags.NoTruncation) : entry.declaration.getText(entry.sourceFile).slice(0, 120),
       source: sourceSpan(entry.sourceFile, entry.fileId, entry.declaration),
       description: metadata.description,
       groupPath: metadata.groupPath,

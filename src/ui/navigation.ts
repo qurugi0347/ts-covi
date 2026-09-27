@@ -129,7 +129,8 @@ export function readNavigation(url: URL, flow: FlowDocument | undefined, entries
       const targetBody = body(node.targetFunctionId);
       if (targetBody && requested.has(key)) { state.open.push(key); visit(targetBody, `${path}/${node.id}`, [...ancestors, node.targetFunctionId]); }
     }
-    nestedNodes(node).forEach((child) => visit(child, path, ancestors));
+    const children = node.kind === "branch" && node.origin === "statement" ? [node.then, ...(node.else ? [node.else] : [])] : nestedNodes(node);
+    children.forEach((child) => visit(child, path, ancestors));
   };
   if (root) visit(root, state.functionId ?? state.moduleId!, baseAncestors);
   if (state.open.length !== requested.size) changed = true;

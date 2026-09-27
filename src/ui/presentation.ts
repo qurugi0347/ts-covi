@@ -1,7 +1,7 @@
 import type { BranchNode, ExitNode, FlowNode, SequenceNode, StatementNode } from "../model/flow.js";
 
 export const nestedNodes = (node: FlowNode): FlowNode[] => node.kind === "sequence" ? node.children
-  : node.kind === "branch" ? [node.then, ...(node.else ? [node.else] : [])]
+  : node.kind === "branch" ? [...(node.conditionFlow ? [node.conditionFlow] : []), node.then, ...(node.else ? [node.else] : [])]
   : node.kind === "loop" ? [...(node.initializerFlow ? [node.initializerFlow] : []), ...(node.conditionFlow ? [node.conditionFlow] : []), node.body, ...(node.incrementorFlow ? [node.incrementorFlow] : [])]
   : node.kind === "try" ? [node.body, ...(node.catch ? [node.catch.body] : []), ...(node.finally ? [node.finally] : [])]
   : [];
@@ -35,12 +35,12 @@ export const flowSummary = (node: FlowNode, ancestors: string[] = []): string =>
   let steps = 0;
   const counts = new Map<string, number>();
   const count = (label: string) => counts.set(label, (counts.get(label) ?? 0) + 1);
+  const summaryChildren = (entry: FlowNode) => entry.kind === "branch" && entry.origin === "statement" ? [entry.then, ...(entry.else ? [entry.else] : [])] : nestedNodes(entry);
   const visit = (entry: FlowNode) => {
     if (entry.kind !== "sequence") steps++;
     if (["return", "throw", "break", "continue", "unsupported"].includes(entry.kind)) count(entry.kind);
     if (entry.kind === "call") {
       if (entry.boundary) count(entry.boundary);
-      if (entry.awaited) count("await");
       if (entry.targetFunctionId && ancestors.includes(entry.targetFunctionId)) count("재귀 경계");
     }
     if (entry.kind === "try") {
@@ -48,14 +48,14 @@ export const flowSummary = (node: FlowNode, ancestors: string[] = []): string =>
       if (entry.finally) count("finally");
       if (entry.finallyOverrides) count("finally 종료 덮어쓰기");
     }
-    nestedNodes(entry).forEach(visit);
+    summaryChildren(entry).forEach(visit);
   };
   if (node.kind === "try") {
     if (node.catch) count("catch");
     if (node.finally) count("finally");
     if (node.finallyOverrides) count("finally 종료 덮어쓰기");
   }
-  nestedNodes(node).forEach(visit);
+  summaryChildren(node).forEach(visit);
   return [`${steps}개 노드`, ...[...counts].map(([label, amount]) => `${label} ${amount}`)].join(" · ");
 };
 
