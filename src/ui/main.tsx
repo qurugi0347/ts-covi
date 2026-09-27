@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { type CallNode, type EntryPoint, type FlowDocument, type FlowFunction, type FlowNode, type SequenceNode, type SourceSpan } from "../model/flow.js";
 import { parseEmbeddedDocument } from "./embedded.js";
 import { branchArms, compactExit, emptyExpressionBranch, flowSummary, guardExitSummary, nestedNodes, presentSequence, type PresentedNode } from "./presentation.js";
+import { defaultNavigation, readNavigation, navigationUrl, type NavigationState } from "./navigation.js";
 import "./styles.css";
 
 const initialDocument = parseEmbeddedDocument(document.getElementById("ts-covi-data")?.textContent ?? undefined);
@@ -43,7 +44,7 @@ type NodeListProps = {
   expanded: Set<string>;
   selectedNodeId?: string;
   onToggle: (id: string) => void;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, ancestors: string[]) => void;
   label?: string;
   path?: string;
   onOpen: (call: CallNode, ancestors: string[]) => void;
@@ -78,10 +79,10 @@ function FlowBlock({ node, statement, document, ancestors, expanded, selectedNod
 
   return <article className={`flow-block block-${node.kind}${selectedNodeId === node.id || (statement && selectedNodeId === statement.id) ? " selected" : ""}`}>
     <header className="block-header">
-      <button className="block-main" type="button" aria-pressed={selectedNodeId === node.id} onClick={() => onSelect(node.id)}>
+      <button className="block-main" type="button" aria-pressed={selectedNodeId === node.id} onClick={() => onSelect(node.id, ancestors)}>
         <span className="kind">{statement?.kind ?? (expressionOnly ? "value" : node.kind)}</span><span className="block-title">{node.kind === "branch" ? (expressionOnly ? `조건부 값 평가: ${node.condition}` : title) : shortExpression(title)}</span>
       </button>
-      {statement && <button className="detail-button" type="button" onClick={() => onSelect(statement.id)}>문장 원문</button>}
+      {statement && <button className="detail-button" type="button" onClick={() => onSelect(statement.id, ancestors)}>문장 원문</button>}
       {node.kind === "call" && node.awaited && <span className="badge">await</span>}
       {node.kind === "call" && node.args.length > 0 && <span className="badge">인자 {node.args.length}</span>}
       {node.kind === "call" && node.boundary && <span className="badge boundary">{node.boundary}</span>}
@@ -95,7 +96,7 @@ function FlowBlock({ node, statement, document, ancestors, expanded, selectedNod
     {node.kind === "unsupported" && <code className="code-line">{node.code}</code>}
 
     {structural && !expressionOnly && <p className="flow-summary">{flowSummary(node, ancestors)}</p>}
-    {node.kind === "branch" && !expressionOnly && bodyVisible && <div className={`nested-grid${compact ? " compact-guard" : ""}`} id={bodyRegion}>{branchArms(node).map(({ node: arm, otherwise }, index) => <React.Fragment key={arm.id}><section><h4>{index === 0 ? branchLabels(arm.when)[0] : <button className="condition-button" type="button" onClick={() => onSelect(arm.id)}>else if {arm.condition}</button>}</h4><NodeList sequence={arm.then} {...childProps} label={branchLabels(arm.when)[0]} /></section>{otherwise && <section><h4>{branchLabels(arm.when)[1]}</h4><NodeList sequence={otherwise} {...childProps} label={branchLabels(arm.when)[1]} /></section>}</React.Fragment>)}</div>}
+    {node.kind === "branch" && !expressionOnly && bodyVisible && <div className={`nested-grid${compact ? " compact-guard" : ""}`} id={bodyRegion}>{branchArms(node).map(({ node: arm, otherwise }, index) => <React.Fragment key={arm.id}><section><h4>{index === 0 ? branchLabels(arm.when)[0] : <button className="condition-button" type="button" onClick={() => onSelect(arm.id, ancestors)}>else if {arm.condition}</button>}</h4><NodeList sequence={arm.then} {...childProps} label={branchLabels(arm.when)[0]} /></section>{otherwise && <section><h4>{branchLabels(arm.when)[1]}</h4><NodeList sequence={otherwise} {...childProps} label={branchLabels(arm.when)[1]} /></section>}</React.Fragment>)}</div>}
     {node.kind === "loop" && bodyVisible && <div className="nested-grid loop-parts" id={bodyRegion}>
       {node.loopKind === "do" ? <>
         <section><h4>본문</h4><NodeList sequence={node.body} {...childProps} /></section>
@@ -134,36 +135,73 @@ const entryGroup = (entry: EntryPoint, flow?: FlowDocument): string => {
   return fn?.groupPath?.length ? `수동 / ${fn.groupPath.join(" / ")}` : "수동";
 };
 
-type VisitFrame = {
-  functionId?: string;
-  moduleId?: string;
-  nodeId?: string;
-  expanded: Set<string>;
-  scrollY: number;
-  callNodeId: string;
-  ancestors: string[];
-};
-
 function App() {
   const flow = initialDocument.flow;
-  const initialEntries = listedEntryPoints(initialDocument.flow);
-  const [mode, setMode] = useState<"entrypoints" | "functions">(() => initialEntries.length ? "entrypoints" : "functions");
-  const [selectedEntryPointId, setSelectedEntryPointId] = useState<string | undefined>(() => initialEntries[0]?.id);
-  const [selectedTargetIndex, setSelectedTargetIndex] = useState(0);
-  const [selectedFunctionId, setSelectedFunctionId] = useState<string | undefined>(() => initialEntries.length ? initialEntries[0]?.targets[0]?.functionId : initialDocument.flow?.roots[0] ?? initialDocument.flow?.functions[0]?.id);
-  const [selectedModuleId, setSelectedModuleId] = useState<string | undefined>(() => initialEntries[0]?.targets[0]?.moduleId);
-  const [selectedNodeId, setSelectedNodeId] = useState<string>();
-  const [query, setQuery] = useState("");
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [visits, setVisits] = useState<VisitFrame[]>([]);
+  const entrypoints = listedEntryPoints(flow);
+  const supplement = (state: NavigationState): NavigationState => {
+    const saved = history.state?.covi;
+    try {
+      if (saved?.v !== 1 || !saved.state || navigationUrl(new URL(location.href), saved.state).href !== navigationUrl(new URL(location.href), state).href) return state;
+      state.trail = state.trail.map((frame, index) => {
+        const prior = saved.state.trail?.[index];
+        if (prior?.callNodeId !== frame.callNodeId || !Array.isArray(prior.expanded)) return frame;
+        const validated = readNavigation(navigationUrl(new URL(location.href), { ...state, functionId: frame.functionId, moduleId: frame.moduleId, node: prior.nodeId, ancestors: frame.ancestors, open: prior.expanded, trail: state.trail.slice(0, index) }), flow, entrypoints).state;
+        return { ...frame, nodeId: validated.node, expanded: validated.open, scrollY: Number.isFinite(prior.scrollY) && prior.scrollY >= 0 ? prior.scrollY : 0 };
+      });
+    } catch { /* A stale browser snapshot cannot override the URL. */ }
+    return state;
+  };
+  const initial = useRef(flow ? readNavigation(new URL(location.href), flow, entrypoints) : { state: defaultNavigation(flow, entrypoints) });
+  const [navigation, setNavigation] = useState<NavigationState>(() => supplement(initial.current.state));
+  const [navigationWarning, setNavigationWarning] = useState(initial.current.warning ?? "");
+  const current = useRef(navigation);
   const pendingScroll = useRef<number | undefined>(undefined);
+  const { mode, entry: selectedEntryPointId, target: selectedTargetIndex, functionId: selectedFunctionId, moduleId: selectedModuleId, node: selectedNodeId, ancestors: selectedAncestors, q: query = "", trail: visits } = navigation;
+  const expanded = new Set(navigation.open);
+  const writeHistory = (state: NavigationState, kind: "push" | "replace", scrollY = window.scrollY) => {
+    try {
+      const url = navigationUrl(new URL(location.href), state);
+      const saved = { ...history.state, covi: { v: 1, state, scrollY } };
+      if (kind === "push" && url.href !== location.href) history.pushState(saved, "", url);
+      else history.replaceState(saved, "", url);
+      setNavigationWarning("");
+    } catch (error) {
+      setNavigationWarning(`탐색 상태를 URL에 저장할 수 없습니다: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  const navigate = (next: NavigationState, kind: "push" | "replace", scrollY?: number) => {
+    if (kind === "push") writeHistory(current.current, "replace");
+    current.current = next;
+    if (scrollY !== undefined) pendingScroll.current = scrollY;
+    writeHistory(next, kind, scrollY ?? window.scrollY);
+    setNavigation(next);
+  };
+  useLayoutEffect(() => {
+    const previous = history.scrollRestoration;
+    history.scrollRestoration = "manual";
+    writeHistory(current.current, "replace");
+    if (initial.current.warning) setNavigationWarning(initial.current.warning);
+    const restore = () => {
+      if (!flow) return;
+      const parsed = readNavigation(new URL(location.href), flow, entrypoints);
+      const saved = history.state?.covi;
+      supplement(parsed.state);
+      current.current = parsed.state;
+      pendingScroll.current = Number.isFinite(saved?.scrollY) && saved.scrollY >= 0 ? saved.scrollY : 0;
+      setNavigation(parsed.state);
+      writeHistory(parsed.state, "replace", pendingScroll.current);
+      setNavigationWarning(parsed.warning ?? "");
+    };
+    window.addEventListener("popstate", restore);
+    return () => { window.removeEventListener("popstate", restore); history.scrollRestoration = previous; };
+  }, []);
   useLayoutEffect(() => {
     if (pendingScroll.current === undefined) return;
     window.scrollTo({ top: pendingScroll.current, behavior: "instant" });
     pendingScroll.current = undefined;
-  }, [selectedFunctionId, selectedModuleId, visits.length]);
+  }, [navigation]);
+  const selectNode = (id: string, ancestors: string[]) => navigate({ ...navigation, node: id, ancestors }, "replace");
   const error = initialDocument.error ?? "";
-  const entrypoints = listedEntryPoints(flow);
   const selectedEntryPoint = entrypoints.find((entry) => entry.id === selectedEntryPointId);
   const selectedFunction = flow?.functions.find((entry) => entry.id === selectedFunctionId);
   const selectedModule = flow?.modules?.find((entry) => entry.id === selectedModuleId);
@@ -179,75 +217,41 @@ function App() {
   });
   const groups = [...new Set(filteredEntries.map((entry) => entryGroup(entry, flow)))];
   const focusAncestors = [...new Set([...visits.flatMap((visit) => visit.ancestors), ...(selectedFunctionId ? [selectedFunctionId] : [])])];
+  const clearSelection = { node: undefined, ancestors: [], open: [], trail: [] };
   const openFunction = (call: CallNode, ancestors: string[]) => {
     if (!call.targetFunctionId || ancestors.includes(call.targetFunctionId)) return;
-    setVisits((current) => [...current, { functionId: selectedFunctionId, moduleId: selectedModuleId, nodeId: selectedNodeId, expanded: new Set(expanded), scrollY: window.scrollY, callNodeId: call.id, ancestors }]);
-    pendingScroll.current = 0;
-    setSelectedFunctionId(call.targetFunctionId);
-    setSelectedModuleId(undefined);
-    setSelectedNodeId(undefined);
-    setExpanded(new Set());
+    navigate({ ...navigation, ...clearSelection, functionId: call.targetFunctionId, moduleId: undefined, trail: [...visits, { functionId: selectedFunctionId, moduleId: selectedModuleId, nodeId: selectedNodeId, expanded: navigation.open, scrollY: window.scrollY, callNodeId: call.id, ancestors }] }, "push", 0);
   };
   const returnTo = (index: number) => {
     const frame = visits[index];
     if (!frame) return;
-    pendingScroll.current = frame.scrollY;
-    setSelectedFunctionId(frame.functionId);
-    setSelectedModuleId(frame.moduleId);
-    setSelectedNodeId(frame.nodeId);
-    setExpanded(new Set(frame.expanded));
-    setVisits((current) => current.slice(0, index));
+    navigate({ ...navigation, functionId: frame.functionId, moduleId: frame.moduleId, node: frame.nodeId, ancestors: frame.ancestors, open: frame.expanded, trail: visits.slice(0, index) }, "push", frame.scrollY);
   };
-  const toggle = (id: string) => setExpanded((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  const toggle = (id: string) => {
+    const next = new Set(expanded);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    navigate({ ...navigation, open: [...next] }, "replace");
+  };
   const selectTarget = (entry: EntryPoint, index: number) => {
-    setVisits([]);
     const target = entry.targets[index];
-    setSelectedEntryPointId(entry.id);
-    setSelectedTargetIndex(index);
-    setSelectedFunctionId(target?.functionId);
-    setSelectedModuleId(target?.moduleId);
-    setSelectedNodeId(undefined);
-    setExpanded(new Set());
+    navigate({ ...navigation, ...clearSelection, mode: "entrypoints", entry: entry.id, target: index, functionId: target?.functionId, moduleId: target?.moduleId }, "push", 0);
   };
-  const showFunctions = () => {
-    setVisits([]);
-    setMode("functions");
-    setQuery("");
-    setSelectedEntryPointId(undefined);
-    setSelectedTargetIndex(0);
-    setSelectedFunctionId(selectedTarget?.functionId ?? selectedFunctionId ?? flow?.functions[0]?.id);
-    setSelectedModuleId(undefined);
-    setSelectedNodeId(undefined);
-    setExpanded(new Set());
-  };
-  const showEntryPoints = () => {
-    setVisits([]);
-    setMode("entrypoints");
-    setQuery("");
-    const entry = entrypoints[0];
-    if (entry) selectTarget(entry, 0);
-    else {
-      setSelectedEntryPointId(undefined);
-      setSelectedTargetIndex(0);
-      setSelectedFunctionId(undefined);
-      setSelectedModuleId(undefined);
-      setSelectedNodeId(undefined);
-      setExpanded(new Set());
-    }
-  };
+  const showFunctions = () => navigate({ ...navigation, ...clearSelection, mode: "functions", q: "", entry: undefined, target: 0, functionId: selectedTarget?.functionId ?? selectedFunctionId ?? flow?.functions[0]?.id, moduleId: undefined }, "push", 0);
+  const showEntryPoints = () => navigate(defaultNavigation(flow, entrypoints), "push", 0);
 
   return <main className="app">
     <header className="hero"><div><span className="eyebrow">STATIC FLOW VIEWER</span><h1>ts-covi</h1><p>같이 생성된 <code>flow.json</code> 분석 결과를 표시합니다.</p></div></header>
+    {navigationWarning && <p className="error" role="status">{navigationWarning}</p>}
     {error && <p className="error" role="alert">{error}</p>}
     {flow?.coverage.status === "partial" && <section className="partial" role="status"><strong>부분 분석 결과</strong><span>미지원 또는 미해결 항목 {flow.diagnostics.length}개를 확인하세요.</span></section>}
     {flow && <div className="workspace">
-      <aside className="functions" aria-label="탐색 목록"><div className="mode-switch" aria-label="탐색 단위"><button type="button" className={mode === "entrypoints" ? "active" : ""} aria-pressed={mode === "entrypoints"} onClick={showEntryPoints}>진입점</button><button type="button" className={mode === "functions" ? "active" : ""} aria-pressed={mode === "functions"} onClick={showFunctions}>전체 함수</button></div><label htmlFor="function-search">{mode === "entrypoints" ? "진입점 검색" : "함수 검색"}</label><input id="function-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} />
-        {mode === "entrypoints" ? entrypoints.length ? groups.map((group) => <section className="entry-group" key={group}><h2>{group}</h2><ul>{filteredEntries.filter((entry) => entryGroup(entry, flow) === group).map((entry) => <li key={entry.id}><button type="button" className={entry.id === selectedEntryPointId ? "active" : ""} aria-pressed={entry.id === selectedEntryPointId} onClick={() => selectTarget(entry, 0)}><span>{entry.method ? `${entry.method} ` : ""}{entry.path ?? entry.label}</span><small>{entry.status === "partial" ? "부분" : entry.framework ?? entry.kind}</small></button></li>)}</ul></section>) : <p className="empty-list">발견된 진입점이 없습니다. <code>@covi-root</code>로 지정할 수 있습니다.</p> : <ul>{visibleFunctions.map((fn) => <li key={fn.id}><button type="button" className={fn.id === selectedFunctionId && !selectedEntryPointId ? "active" : ""} aria-pressed={fn.id === selectedFunctionId && !selectedEntryPointId} onClick={() => { setVisits([]); setExpanded(new Set()); setSelectedEntryPointId(undefined); setSelectedFunctionId(fn.id); setSelectedModuleId(undefined); setSelectedNodeId(undefined); }}><span>{fn.name}</span>{flow.roots.includes(fn.id) && <small>root</small>}</button></li>)}</ul>}
+      <aside className="functions" aria-label="탐색 목록"><div className="mode-switch" aria-label="탐색 단위"><button type="button" className={mode === "entrypoints" ? "active" : ""} aria-pressed={mode === "entrypoints"} onClick={showEntryPoints}>진입점</button><button type="button" className={mode === "functions" ? "active" : ""} aria-pressed={mode === "functions"} onClick={showFunctions}>전체 함수</button></div><label htmlFor="function-search">{mode === "entrypoints" ? "진입점 검색" : "함수 검색"}</label><input id="function-search" type="search" value={query} onChange={(event) => navigate({ ...navigation, q: event.target.value }, "replace")} />
+        {mode === "entrypoints" ? entrypoints.length ? groups.map((group) => <section className="entry-group" key={group}><h2>{group}</h2><ul>{filteredEntries.filter((entry) => entryGroup(entry, flow) === group).map((entry) => <li key={entry.id}><button type="button" className={entry.id === selectedEntryPointId ? "active" : ""} aria-pressed={entry.id === selectedEntryPointId} onClick={() => selectTarget(entry, 0)}><span>{entry.method ? `${entry.method} ` : ""}{entry.path ?? entry.label}</span><small>{entry.status === "partial" ? "부분" : entry.framework ?? entry.kind}</small></button></li>)}</ul></section>) : <p className="empty-list">발견된 진입점이 없습니다. <code>@covi-root</code>로 지정할 수 있습니다.</p> : <ul>{visibleFunctions.map((fn) => <li key={fn.id}><button type="button" className={fn.id === selectedFunctionId && !selectedEntryPointId ? "active" : ""} aria-pressed={fn.id === selectedFunctionId && !selectedEntryPointId} onClick={() => { navigate({ ...navigation, ...clearSelection, entry: undefined, functionId: fn.id, moduleId: undefined }, "push", 0); }}><span>{fn.name}</span>{flow.roots.includes(fn.id) && <small>root</small>}</button></li>)}</ul>}
         {mode === "entrypoints" && entrypoints.length > 0 && filteredEntries.length === 0 && <p className="empty-list">검색 결과가 없습니다.</p>}
         {mode === "functions" && functions.length === 0 && <p className="empty-list">검색 결과가 없습니다.</p>}
         {mode === "functions" && functions.length > FUNCTION_RESULT_LIMIT && <p className="empty-list">일치하는 함수 {functions.length}개 중 {FUNCTION_RESULT_LIMIT}개를 표시합니다. 검색어로 범위를 좁혀 주세요.</p>}
       </aside>
-      <section className="canvas" aria-label="선택한 흐름">{selectedEntryPoint && <header className="entry-header"><span className="badge boundary">{entryGroup(selectedEntryPoint, flow)}</span><h2>{selectedEntryPoint.label}</h2>{selectedEntryPoint.command && <code>{selectedEntryPoint.command}</code>}{selectedEntryPoint.reasons.map((reason) => <p key={reason}>{reason}</p>)}{selectedEntryPoint.targets.length > 1 && <div className="target-list" aria-label="진입 대상">{selectedEntryPoint.targets.map((target, index) => <button key={`${target.role}:${index}`} type="button" className={index === selectedTargetIndex ? "active" : ""} aria-pressed={index === selectedTargetIndex} onClick={() => selectTarget(selectedEntryPoint, index)}>{target.role}: {target.expression}</button>)}</div>}</header>}{visits.length > 0 && <nav className="breadcrumbs" aria-label="함수 이동 경로"><button type="button" onClick={() => returnTo(visits.length - 1)}>← 돌아가기</button>{visits.map((visit, index) => <React.Fragment key={`${visit.callNodeId}:${index}`}><button type="button" onClick={() => returnTo(index)} title={`호출 위치: ${visit.callNodeId}`}>{flow.functions.find((fn) => fn.id === visit.functionId)?.name ?? selectedEntryPoint?.label ?? "시작 흐름"}</button><span aria-hidden="true">›</span></React.Fragment>)}<span aria-current="page">{selectedFunction?.name}</span></nav>}{selectedFunction ? <><header><h2>{selectedFunction.description ?? selectedFunction.name}</h2><details className="signature"><summary>입력 · 반환</summary><code>{selectedFunction.signature}</code></details></header><NodeList sequence={selectedFunction.body} document={flow} ancestors={focusAncestors} path={selectedFunction.id} expanded={expanded} selectedNodeId={selectedNodeId} onToggle={toggle} onSelect={setSelectedNodeId} onOpen={openFunction} /></> : selectedModule ? <><header><h2>{selectedEntryPoint?.label ?? selectedModule.id}</h2><code>{selectedModule.id}</code></header><NodeList sequence={selectedModule.body} document={flow} ancestors={[]} path={selectedModule.id} expanded={expanded} selectedNodeId={selectedNodeId} onToggle={toggle} onSelect={setSelectedNodeId} onOpen={openFunction} /></> : selectedTarget ? <p>{selectedTarget.reason ?? "연결된 함수 본문 없이 원문만 확인할 수 있습니다."}</p> : <p>{mode === "entrypoints" ? "진입점을 선택하세요." : "함수를 선택하세요."}</p>}</section>
+      <section className="canvas" aria-label="선택한 흐름">{selectedEntryPoint && <header className="entry-header"><span className="badge boundary">{entryGroup(selectedEntryPoint, flow)}</span><h2>{selectedEntryPoint.label}</h2>{selectedEntryPoint.command && <code>{selectedEntryPoint.command}</code>}{selectedEntryPoint.reasons.map((reason) => <p key={reason}>{reason}</p>)}{selectedEntryPoint.targets.length > 1 && <div className="target-list" aria-label="진입 대상">{selectedEntryPoint.targets.map((target, index) => <button key={`${target.role}:${index}`} type="button" className={index === selectedTargetIndex ? "active" : ""} aria-pressed={index === selectedTargetIndex} onClick={() => selectTarget(selectedEntryPoint, index)}>{target.role}: {target.expression}</button>)}</div>}</header>}{visits.length > 0 && <nav className="breadcrumbs" aria-label="함수 이동 경로"><button type="button" onClick={() => returnTo(visits.length - 1)}>← 돌아가기</button>{visits.map((visit, index) => <React.Fragment key={`${visit.callNodeId}:${index}`}><button type="button" onClick={() => returnTo(index)} title={`호출 위치: ${visit.callNodeId}`}>{flow.functions.find((fn) => fn.id === visit.functionId)?.name ?? selectedEntryPoint?.label ?? "시작 흐름"}</button><span aria-hidden="true">›</span></React.Fragment>)}<span aria-current="page">{selectedFunction?.name}</span></nav>}{selectedFunction ? <><header><h2>{selectedFunction.description ?? selectedFunction.name}</h2><details className="signature"><summary>입력 · 반환</summary><code>{selectedFunction.signature}</code></details></header><NodeList sequence={selectedFunction.body} document={flow} ancestors={focusAncestors} path={selectedFunction.id} expanded={expanded} selectedNodeId={selectedNodeId} onToggle={toggle} onSelect={selectNode} onOpen={openFunction} /></> : selectedModule ? <><header><h2>{selectedEntryPoint?.label ?? selectedModule.id}</h2><code>{selectedModule.id}</code></header><NodeList sequence={selectedModule.body} document={flow} ancestors={[]} path={selectedModule.id} expanded={expanded} selectedNodeId={selectedNodeId} onToggle={toggle} onSelect={selectNode} onOpen={openFunction} /></> : selectedTarget ? <p>{selectedTarget.reason ?? "연결된 함수 본문 없이 원문만 확인할 수 있습니다."}</p> : <p>{mode === "entrypoints" ? "진입점을 선택하세요." : "함수를 선택하세요."}</p>}</section>
       <Inspector document={flow} node={selectedNode} fn={selectedFunction} source={!selectedNode ? selectedTarget?.source ?? selectedEntryPoint?.source : undefined} />
     </div>}
     {flow && <details className="diagnostics"><summary>진단 {flow.diagnostics.length}개</summary>{flow.diagnostics.length ? <ul>{flow.diagnostics.map((item, index) => <li key={`${item.code}:${index}`}><strong>{item.code}</strong> {item.message}</li>)}</ul> : <p>진단이 없습니다.</p>}</details>}
