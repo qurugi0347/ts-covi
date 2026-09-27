@@ -455,6 +455,7 @@ export function validateFlowDocument(value: unknown): FlowDocument {
       body,
     };
   });
+  const functionsById = new Map(functions.map((fn) => [fn.id, fn]));
   const classIds = new Set<string>();
   const ownedFunctions = new Set<string>();
   const visibility = (value: unknown, path: string): ClassVisibility => enumValue(value, path, ["public", "protected", "private"] as const);
@@ -492,7 +493,7 @@ export function validateFlowDocument(value: unknown): FlowDocument {
       const kind = enumValue(method.kind, `${p}.kind`, ["method", "property-function", "get", "set"] as const);
       const functionId = optionalString(method.functionId, `${p}.functionId`);
       if (functionId !== undefined) {
-        const fn = functions.find((fn) => fn.id === functionId);
+        const fn = functionsById.get(functionId);
         if (!fn || ownedFunctions.has(functionId) || fn.classId !== id || fn.source.fileId !== source.fileId || fn.source.start < methodSource.start || fn.source.end > methodSource.end || kind === "get" || kind === "set") throw new FlowValidationError(`${p}.functionId has invalid class ownership`);
         ownedFunctions.add(functionId);
       }
@@ -500,10 +501,16 @@ export function validateFlowDocument(value: unknown): FlowDocument {
     });
     return { id, name: string(raw.name, `${path}.name`), source, description: optionalString(raw.description, `${path}.description`), extends: optionalString(raw.extends, `${path}.extends`), implements: array(raw.implements, `${path}.implements`).map((entry, index) => string(entry, `${path}.implements[${index}]`)), fields, constructor, methods };
   });
+  const classesByFile = new Map<string, FlowClass[]>();
+  for (const entry of classes ?? []) {
+    const entries = classesByFile.get(entry.source.fileId) ?? [];
+    entries.push(entry);
+    classesByFile.set(entry.source.fileId, entries);
+  }
   for (const fn of functions) {
     if (fn.classId !== undefined) {
       if (!classIds.has(fn.classId) || !ownedFunctions.has(fn.id)) throw new FlowValidationError(`invalid class reference: ${fn.classId}`);
-      const owners = classes!.filter((entry) => entry.source.fileId === fn.source.fileId && entry.source.start <= fn.source.start && entry.source.end >= fn.source.end);
+      const owners = (classesByFile.get(fn.source.fileId) ?? []).filter((entry) => entry.source.start <= fn.source.start && entry.source.end >= fn.source.end);
       const directOwner = owners.sort((a, b) => (a.source.end - a.source.start) - (b.source.end - b.source.start))[0];
       if (directOwner?.id !== fn.classId) throw new FlowValidationError(`function ${fn.id} belongs to a nested class`);
     }
