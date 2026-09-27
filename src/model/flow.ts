@@ -91,6 +91,27 @@ export type FlowNode =
   | TryNode
   | UnsupportedNode;
 
+export type ClassVisibility = "public" | "protected" | "private";
+export type ClassField = {
+  name: string; type: string; source: SourceSpan; description?: string;
+  visibility: ClassVisibility; static: boolean; readonly: boolean; optional: boolean;
+};
+export type ClassParameter = {
+  name: string; type: string; source: SourceSpan; description?: string;
+  optional: boolean; rest: boolean; visibility?: ClassVisibility; readonly?: boolean;
+};
+export type ClassConstructor = { source: SourceSpan; signature: string; parameters: ClassParameter[] };
+export type ClassMethod = {
+  name: string; source: SourceSpan; signature: string; description?: string;
+  visibility: ClassVisibility; static: boolean;
+  kind: "method" | "property-function" | "get" | "set"; functionId?: string;
+};
+export type FlowClass = {
+  id: string; name: string; source: SourceSpan; description?: string;
+  extends?: string; implements: string[]; fields: ClassField[];
+  constructor?: ClassConstructor; methods: ClassMethod[];
+};
+
 export type FlowFunction = {
   id: string;
   name: string;
@@ -98,6 +119,8 @@ export type FlowFunction = {
   source: SourceSpan;
   description?: string;
   groupPath?: string[];
+  className?: string;
+  classId?: string;
   body: SequenceNode;
 };
 
@@ -138,6 +161,7 @@ export type FlowDocument = {
   project: { name: string; tsconfig: string };
   files: Array<{ id: string; path: string; contentHash: string; source: string }>;
   functions: FlowFunction[];
+  classes?: FlowClass[];
   modules?: FlowModule[];
   entrypoints?: EntryPoint[];
   roots: string[];
@@ -413,10 +437,65 @@ export function validateFlowDocument(value: unknown): FlowDocument {
       signature: string(fn.signature, `document.functions[${index}].signature`),
       source: span(fn.source, `document.functions[${index}].source`, fileLengths),
       description: optionalString(fn.description, `document.functions[${index}].description`),
+      className: optionalString(fn.className, `document.functions[${index}].className`),
+      classId: optionalString(fn.classId, `document.functions[${index}].classId`),
       groupPath: fn.groupPath === undefined ? undefined : array(fn.groupPath, `document.functions[${index}].groupPath`).map((part, partIndex) => string(part, `document.functions[${index}].groupPath[${partIndex}]`)),
       body,
     };
   });
+  const classIds = new Set<string>();
+  const ownedFunctions = new Set<string>();
+  const visibility = (value: unknown, path: string): ClassVisibility => enumValue(value, path, ["public", "protected", "private"] as const);
+  const classes = candidate.classes === undefined ? undefined : array(candidate.classes, "document.classes").map((entry, index): FlowClass => {
+    const path = `document.classes[${index}]`;
+    const raw = object(entry, path);
+    const id = string(raw.id, `${path}.id`);
+    if (classIds.has(id)) throw new FlowValidationError(`duplicate class id: ${id}`);
+    classIds.add(id);
+    const source = span(raw.source, `${path}.source`, fileLengths);
+    const memberSource = (value: unknown, memberPath: string): SourceSpan => {
+      const result = span(value, memberPath, fileLengths);
+      if (result.fileId !== source.fileId || result.start < source.start || result.end > source.end) throw new FlowValidationError(`${memberPath} is outside its class`);
+      return result;
+    };
+    const fields = array(raw.fields, `${path}.fields`).map((entry, index): ClassField => {
+      const p = `${path}.fields[${index}]`; const field = object(entry, p);
+      return { name: string(field.name, `${p}.name`), type: string(field.type, `${p}.type`), source: memberSource(field.source, `${p}.source`), description: optionalString(field.description, `${p}.description`), visibility: visibility(field.visibility, `${p}.visibility`), static: boolean(field.static, `${p}.static`), readonly: boolean(field.readonly, `${p}.readonly`), optional: boolean(field.optional, `${p}.optional`) };
+    });
+    let constructor: ClassConstructor | undefined;
+    if (Object.hasOwn(raw, "constructor") && raw.constructor !== undefined) {
+      const p = `${path}.constructor`; const value = object(raw.constructor, p);
+      const constructorSource = memberSource(value.source, `${p}.source`);
+      const parameters = array(value.parameters, `${p}.parameters`).map((entry, index): ClassParameter => {
+        const p2 = `${p}.parameters[${index}]`; const parameter = object(entry, p2);
+        const parameterSource = memberSource(parameter.source, `${p2}.source`);
+        if (parameterSource.start < constructorSource.start || parameterSource.end > constructorSource.end) throw new FlowValidationError(`${p2}.source is outside its constructor`);
+        return { name: string(parameter.name, `${p2}.name`), type: string(parameter.type, `${p2}.type`), source: parameterSource, description: optionalString(parameter.description, `${p2}.description`), optional: boolean(parameter.optional, `${p2}.optional`), rest: boolean(parameter.rest, `${p2}.rest`), visibility: parameter.visibility === undefined ? undefined : visibility(parameter.visibility, `${p2}.visibility`), readonly: parameter.readonly === undefined ? undefined : boolean(parameter.readonly, `${p2}.readonly`) };
+      });
+      constructor = { source: constructorSource, signature: string(value.signature, `${p}.signature`), parameters };
+    }
+    const methods = array(raw.methods, `${path}.methods`).map((entry, index): ClassMethod => {
+      const p = `${path}.methods[${index}]`; const method = object(entry, p);
+      const methodSource = memberSource(method.source, `${p}.source`);
+      const kind = enumValue(method.kind, `${p}.kind`, ["method", "property-function", "get", "set"] as const);
+      const functionId = optionalString(method.functionId, `${p}.functionId`);
+      if (functionId !== undefined) {
+        const fn = functions.find((fn) => fn.id === functionId);
+        if (!fn || ownedFunctions.has(functionId) || fn.classId !== id || fn.source.fileId !== source.fileId || fn.source.start < methodSource.start || fn.source.end > methodSource.end || kind === "get" || kind === "set") throw new FlowValidationError(`${p}.functionId has invalid class ownership`);
+        ownedFunctions.add(functionId);
+      }
+      return { name: string(method.name, `${p}.name`), source: methodSource, signature: string(method.signature, `${p}.signature`), description: optionalString(method.description, `${p}.description`), visibility: visibility(method.visibility, `${p}.visibility`), static: boolean(method.static, `${p}.static`), kind, functionId };
+    });
+    return { id, name: string(raw.name, `${path}.name`), source, description: optionalString(raw.description, `${path}.description`), extends: optionalString(raw.extends, `${path}.extends`), implements: array(raw.implements, `${path}.implements`).map((entry, index) => string(entry, `${path}.implements[${index}]`)), fields, constructor, methods };
+  });
+  for (const fn of functions) {
+    if (fn.classId !== undefined) {
+      if (!classIds.has(fn.classId) || !ownedFunctions.has(fn.id)) throw new FlowValidationError(`invalid class reference: ${fn.classId}`);
+      const owners = classes!.filter((entry) => entry.source.fileId === fn.source.fileId && entry.source.start <= fn.source.start && entry.source.end >= fn.source.end);
+      const directOwner = owners.sort((a, b) => (a.source.end - a.source.start) - (b.source.end - b.source.start))[0];
+      if (directOwner?.id !== fn.classId) throw new FlowValidationError(`function ${fn.id} belongs to a nested class`);
+    }
+  }
   const moduleIds = new Set<string>();
   const modules = candidate.modules === undefined ? undefined : array(candidate.modules, "document.modules").map((entry, index) => {
     const module = object(entry, `document.modules[${index}]`);
@@ -561,6 +640,7 @@ export function validateFlowDocument(value: unknown): FlowDocument {
     project: { name: string(project.name, "document.project.name"), tsconfig: string(project.tsconfig, "document.project.tsconfig") },
     files,
     functions,
+    classes,
     modules,
     entrypoints,
     roots,
