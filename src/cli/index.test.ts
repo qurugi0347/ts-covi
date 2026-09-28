@@ -30,7 +30,7 @@ test("resolves default and relative outputs from the project root while preservi
     assert.equal(document.project.name, "project");
     assert.equal(viewer.includes(VIEWER_DATA_MARKER), false);
     assert.equal(viewer.includes("ts-covi-data"), true);
-    assert.equal(viewer.includes("STATIC FLOW VIEWER"), true);
+    assert.equal(viewer.includes("STATIC FLOW VIEWER"), false);
     assert.equal(viewer.includes('"name":"project"'), true);
     assert.equal(viewer.includes("</script><img"), false);
     const embedded = viewer.match(/<script id="ts-covi-data" type="application\/json">([\s\S]*?)<\/script>/)?.[1];
