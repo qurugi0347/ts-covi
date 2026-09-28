@@ -20,5 +20,5 @@ export function ClassInspector({ entry, document, selectedSource }: { entry: Flo
   const span = selectedSource ?? entry.source;
   const file = document.files.find((item) => item.id === span.fileId);
   const code = file?.source.slice(span.start, span.end) ?? "원문을 찾을 수 없습니다.";
-  return <aside className="inspector"><h2>클래스 상세</h2><h3>{entry.name}</h3><p className="source-location">{file?.path}:{span.startLine}:{span.startColumn}</p>{selectedSource ? <pre><code>{code}</code></pre> : <details><summary>클래스 원문</summary><pre><code>{code}</code></pre></details>}</aside>;
+  return <aside id="covi-inspector" className="inspector"><h2>클래스 상세</h2><h3>{entry.name}</h3><p className="source-location">{file?.path}:{span.startLine}:{span.startColumn}</p>{selectedSource ? <pre><code>{code}</code></pre> : <details><summary>클래스 원문</summary><pre><code>{code}</code></pre></details>}</aside>;
 }
