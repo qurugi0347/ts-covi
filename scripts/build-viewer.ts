@@ -18,7 +18,7 @@ const javascript = result.outputFiles.find((file) => file.path.endsWith(".js"))?
 const css = result.outputFiles.find((file) => file.path.endsWith(".css"))?.text ?? "";
 if (!javascript) throw new Error("Viewer JavaScript bundle was not produced.");
 const html = `<!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ts-covi</title><style>${css}</style></head>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="STATIC FLOW VIEWER"><title>ts-covi</title><style>${css}</style></head>
 <body><div id="root"></div><script id="ts-covi-data" type="application/json">${JSON.stringify(VIEWER_DATA_MARKER)}</script><script>${javascript}</script></body></html>`;
 await writeFile("dist/index.html", html);
 const built = await readFile("dist/index.html", "utf8");
